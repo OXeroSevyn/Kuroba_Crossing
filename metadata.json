@@ -1,0 +1,6 @@
+{
+  "name": "Kuroba Crossing",
+  "description": "A sunlit 3D third-person micro-voxel shooter set in a richly detailed Japanese rural railway crossing with smooth character movement, dash mechanics, and tactical wave combat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

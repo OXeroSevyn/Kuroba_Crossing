@@ -1,0 +1,201 @@
+export type GamePhase = 'title' | 'customize' | 'playing' | 'paused' | 'victory' | 'gameover';
+
+export type GameMode = 'mecha' | 'zombies';
+
+export type TimeOfDay = 'day' | 'night';
+
+export type WeaponId = 'pulse' | 'scatter' | 'rail';
+
+export type WorldZoneId = 'kuroba' | 'aurora' | 'fungi' | 'snowpeak';
+
+export type VehicleKind = 'kei_truck' | 'olive_jeep' | 'aurora_coupe' | 'fungi_buggy' | 'snow_patrol';
+
+export interface LoadoutConfig {
+  // Character (7 categories, 68 options)
+  headgear: string;
+  visorColor: string;
+  jacketColor: string;
+  outfitStyle: string;
+  pantsStyle: string;
+  backpack: string;
+  accentGlow: string;
+  // Gun Armory (7 categories, 60 options)
+  gunSkin: string;
+  optic: string;
+  muzzle: string;
+  underbarrel: string;
+  magazine: string;
+  tracerFx: string;
+  charm: string;
+}
+
+export interface WeaponSpec {
+  id: WeaponId;
+  slot: 1 | 2 | 3;
+  name: string;
+  role: string;
+  damage: number;
+  fireInterval: number; // seconds between shots
+  magSize: number;
+  reloadDuration: number; // seconds
+  pellets: number;
+  spreadRad: number;
+  projectileSpeed: number;
+  piercing: boolean;
+  recoilKick: number;
+  hitstopSec: number;
+  accentHex: string;
+  accentColor: number;
+}
+
+export type EnemyArchetype = 'rusher' | 'trooper' | 'charger' | 'drone' | 'shogun';
+
+export interface ColliderBox {
+  id: string;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+  walkableTop?: boolean; // player can stand/step on top (e.g. veranda, platform)
+  blocksBullets?: boolean;
+}
+
+export interface PlayerKinematicsState {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  facingYaw: number;
+  grounded: boolean;
+  coyoteTimer: number;
+  jumpBufferTimer: number;
+  dashTimer: number; // > 0 while actively dashing
+  dashCooldown: number;
+  dashCharges: number;
+  maxDashCharges: number;
+  dashRechargeTimer: number;
+  dashDirX: number;
+  dashDirZ: number;
+  invulnTimer: number;
+  squashX: number;
+  squashY: number;
+  walkDistance: number;
+}
+
+export interface VehicleKinematicsState {
+  id: string;
+  kind: VehicleKind;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  speed: number; // signed m/s along heading
+  vx: number; // residual crash knockback velocity X
+  vz: number; // residual crash knockback velocity Z
+  steerAngle: number; // -1..1 visual wheel turn
+  wheelSpin: number;
+  nitro: number; // 0..100
+  boosting: boolean;
+  drifting: boolean;
+  maxSpeed: number;
+  accel: number;
+  radius: number;
+  hp: number;
+  maxHp: number;
+  destroyed: boolean;
+  respawnTimer: number;
+}
+
+export interface WeaponRuntimeState {
+  active: WeaponId;
+  ammo: Record<WeaponId, number>;
+  fireCooldown: number;
+  reloading: boolean;
+  reloadTimer: number;
+  reloadTotal: number;
+}
+
+export interface WaveSpawnEntry {
+  archetype: EnemyArchetype;
+  delay: number;
+  spawnIndex: number;
+}
+
+export interface WavePlan {
+  wave: number;
+  title: string;
+  subtitle: string;
+  entries: WaveSpawnEntry[];
+  speedMultiplier: number;
+  maxConcurrent: number;
+}
+
+export interface HudSnapshot {
+  phase: GamePhase;
+  gameMode: GameMode;
+  timeOfDay: TimeOfDay;
+  zone: WorldZoneId;
+  zoneName: string;
+  zoneBannerTimer: number;
+  hp: number;
+  maxHp: number;
+  ghostHp: number;
+  dashCharges: number;
+  maxDashCharges: number;
+  dashRechargeProgress: number; // 0..1
+  score: number;
+  bestScore: number;
+  combo: number;
+  comboTimer: number; // 0..1 normalized
+  wave: number;
+  totalWaves: number | null; // null in endless Zombie Survival
+  waveTitle: string;
+  waveBannerTimer: number;
+  enemiesRemaining: number;
+  weapon: WeaponId;
+  ammo: Record<WeaponId, number>;
+  magSizes: Record<WeaponId, number>;
+  reloading: boolean;
+  reloadProgress: number; // 0..1
+  aiming: boolean;
+  pointerLocked: boolean;
+  hitmarkerTimer: number;
+  hitmarkerCrit: boolean;
+  hurtFlash: number; // 0..1
+  muted: boolean;
+  kills: number;
+  elapsedSec: number;
+  bossHp: number;
+  bossMaxHp: number;
+  bossName: string;
+  crosshairSpread: number;
+  // Vehicle state
+  inVehicle: boolean;
+  vehicleName: string;
+  vehicleSpeedKmh: number;
+  vehicleNitro: number; // 0..100
+  vehicleHp: number;
+  vehicleMaxHp: number;
+  nearbyVehicleName: string | null;
+  minimapPlayer: { x: number; z: number; yaw: number };
+  minimapEnemies: Array<{ x: number; z: number; archetype: EnemyArchetype }>;
+  minimapVehicles: Array<{ x: number; z: number; active: boolean }>;
+}
+
+export interface RunSummary {
+  outcome: 'victory' | 'gameover';
+  gameMode: GameMode;
+  score: number;
+  bestScore: number;
+  waveReached: number;
+  totalWaves: number | null;
+  kills: number;
+  elapsedSec: number;
+  damageTaken: number;
+}
+

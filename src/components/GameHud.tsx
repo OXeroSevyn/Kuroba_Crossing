@@ -1,0 +1,646 @@
+import React from 'react';
+import { ARENA_HALF_EXTENT, WEAPON_ORDER, WEAPONS, WORLD_ZONE_INFO } from '../game/rules';
+import type { HudSnapshot, WeaponId } from '../game/types';
+
+interface GameHudProps {
+  hud: HudSnapshot;
+  onSelectWeapon: (id: WeaponId) => void;
+  onToggleTimeOfDay: () => void;
+  onToggleMute: () => void;
+  onPause: () => void;
+  onRestart: () => void;
+}
+
+const WeaponIcon: React.FC<{ id: WeaponId; active: boolean }> = ({ id, active }) => {
+  const accent = active ? WEAPONS[id].accentHex : '#a89a88';
+  if (id === 'pulse') {
+    // M4-K Tactical Carbine silhouette
+    return (
+      <svg viewBox="0 0 38 18" className="w-8 h-4">
+        <path d="M1 7h6v5H1V7zm6 1h17v4H18l2 5h-3l-2-5h-3l-2 4H8l1-4H7V8z" fill="#2c3138" stroke="#f5efe6" strokeWidth="1" />
+        <rect x="24" y="8.5" width="12" height="2.4" fill="#a8b2bd" />
+        <rect x="11" y="4.5" width="6" height="3" fill={accent} />
+      </svg>
+    );
+  }
+  if (id === 'scatter') {
+    // M870 Breach Shotgun silhouette
+    return (
+      <svg viewBox="0 0 38 18" className="w-8 h-4">
+        <path d="M1 10l9-2h9v4h-7l-4 4H1v-6z" fill="#6b3e22" stroke="#f5efe6" strokeWidth="1" />
+        <rect x="14" y="6.5" width="22" height="3" fill="#b4bec9" />
+        <rect x="18" y="9.5" width="11" height="3.5" fill={accent} />
+      </svg>
+    );
+  }
+  // K-50 Precision Rifle silhouette
+  return (
+    <svg viewBox="0 0 38 18" className="w-8 h-4">
+      <path d="M1 8h15v4h-3v4h-4v-4H1V8z" fill="#242a32" stroke="#f5efe6" strokeWidth="1" />
+      <rect x="16" y="8.5" width="18" height="2.2" fill="#cfd6dd" />
+      <rect x="33" y="7.5" width="4" height="4" fill="#3a424c" />
+      <rect x="10" y="3.5" width="11" height="3" fill={accent} />
+    </svg>
+  );
+};
+
+export const GameHud: React.FC<GameHudProps> = ({
+  hud,
+  onSelectWeapon,
+  onToggleTimeOfDay,
+  onToggleMute,
+  onPause,
+  onRestart,
+}) => {
+  const isZombies = hud.gameMode === 'zombies';
+  const isNight = hud.timeOfDay === 'night';
+  const activeSpec = WEAPONS[hud.weapon];
+  const currentAmmo = hud.ammo[hud.weapon];
+  const currentMagMax = hud.magSizes[hud.weapon] ?? activeSpec.magSize;
+  const zoneInfo = WORLD_ZONE_INFO[hud.zone];
+  const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
+  const ghostPct = Math.max(hpPct, Math.min(100, (hud.ghostHp / hud.maxHp) * 100));
+  const lowHp = hud.hp <= 30;
+  const spreadPx = (hud.aiming ? 5 : 10) + hud.crosshairSpread * 16;
+
+  // Open-world Minimap coordinate converter (-148..148 -> 0..136)
+  const mapSize = 136;
+  const toMapX = (wx: number) => ((wx + ARENA_HALF_EXTENT) / (ARENA_HALF_EXTENT * 2)) * mapSize;
+  const toMapY = (wz: number) => ((wz + ARENA_HALF_EXTENT) / (ARENA_HALF_EXTENT * 2)) * mapSize;
+
+  return (
+    <div className="fixed inset-0 z-10 pointer-events-none">
+      {/* Subtle Cinematic Atmospheric Edge Vignette */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(5,8,14,0.42) 100%)',
+        }}
+      />
+
+      {/* Low-HP & Hurt Peripheral Vignette */}
+      {(hud.hurtFlash > 0.02 || lowHp) && (
+        <div
+          className="fixed inset-0 pointer-events-none"
+          style={{
+            boxShadow: `inset 0 0 ${lowHp ? 95 : 70}px rgba(220, 42, 34, ${Math.min(
+              0.68,
+              hud.hurtFlash * 0.65 + (lowHp ? 0.24 : 0),
+            )})`,
+          }}
+        />
+      )}
+
+      {/* Exact Center Dynamic Crosshair + Hitmarker + Reload Arc (hidden while driving) */}
+      {!hud.inVehicle && (
+        <div
+          className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+          aria-hidden="true"
+        >
+          <svg viewBox="-48 -48 96 96" className="w-24 h-24 overflow-visible">
+          {/* Reload progress ring */}
+          {hud.reloading && (
+            <circle
+              cx="0"
+              cy="0"
+              r="18"
+              fill="none"
+              stroke={activeSpec.accentHex}
+              strokeWidth="3"
+              strokeDasharray={`${hud.reloadProgress * 113.1} 113.1`}
+              transform="rotate(-90)"
+            />
+          )}
+
+          {/* Crisp 4-tick reticle with dark outline */}
+          <g stroke="#140e0a" strokeWidth="4" strokeLinecap="square">
+            <line x1="0" y1={-spreadPx - 7} x2="0" y2={-spreadPx} />
+            <line x1="0" y1={spreadPx} x2="0" y2={spreadPx + 7} />
+            <line x1={-spreadPx - 7} y1="0" x2={-spreadPx} y2="0" />
+            <line x1={spreadPx} y1="0" x2={spreadPx + 7} y2="0" />
+          </g>
+          <g stroke={hud.aiming ? activeSpec.accentHex : '#fff7e8'} strokeWidth="2" strokeLinecap="square">
+            <line x1="0" y1={-spreadPx - 7} x2="0" y2={-spreadPx} />
+            <line x1="0" y1={spreadPx} x2="0" y2={spreadPx + 7} />
+            <line x1={-spreadPx - 7} y1="0" x2={-spreadPx} y2="0" />
+            <line x1={spreadPx} y1="0" x2={spreadPx + 7} y2="0" />
+          </g>
+          <circle cx="0" cy="0" r="2.2" fill={activeSpec.accentHex} stroke="#140e0a" strokeWidth="1.2" />
+
+          {/* Hitmarker ticks */}
+          {hud.hitmarkerTimer > 0 && (
+            <g
+              stroke={hud.hitmarkerCrit ? '#ffe066' : '#ff4d3b'}
+              strokeWidth={hud.hitmarkerCrit ? '3' : '2.2'}
+              strokeLinecap="square"
+            >
+              <line x1="-11" y1="-11" x2="-5" y2="-5" />
+              <line x1="11" y1="-11" x2="5" y2="-5" />
+              <line x1="-11" y1="11" x2="-5" y2="5" />
+              <line x1="11" y1="11" x2="5" y2="5" />
+            </g>
+          )}
+        </svg>
+        {hud.reloading && (
+          <div className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-center -mt-3 text-[#ffe7b0] hud-stroke">
+            RELOADING
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* Vehicle Interaction Prompt or Active Driving Hint */}
+      {!hud.inVehicle && hud.nearbyVehicleName && (
+        <div
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#18141c]/94 border-2 border-[#ffd47a] shadow-[0_6px_18px_rgba(0,0,0,0.6)] flex items-center gap-2.5"
+          data-testid="vehicle-prompt"
+        >
+          <span className="px-2 py-0.5 rounded bg-[#ffd47a] text-[#17110b] font-display font-bold text-xs">
+            E
+          </span>
+          <span className="text-xs sm:text-sm font-display font-bold uppercase tracking-[0.14em] text-[#fff6e6]">
+            DRIVE {hud.nearbyVehicleName}
+          </span>
+        </div>
+      )}
+
+      {hud.inVehicle && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded bg-[#14131a]/88 border border-[#45f2ff]/40 text-[11px] font-display uppercase tracking-[0.12em] text-[#e6f7ff]">
+          W/S GAS &amp; REVERSE · A/D STEER · SHIFT NITRO · SPACE DRIFT · [E] EXIT VEHICLE
+        </div>
+      )}
+
+      {/* TOP-LEFT CLUSTER: Vitality Bar (with Trailing Damage Ghost Bar) & Boost Dash Charges */}
+      <div className="fixed top-4 left-4 sm:top-5 sm:left-5 flex flex-col gap-2 w-[236px]">
+        <div className="bg-[#211813]/90 border border-[#e6be74]/45 rounded px-3.5 py-2.5 shadow-[0_4px_14px_rgba(0,0,0,0.45)]">
+          <div className="flex items-baseline justify-between mb-1.5">
+            <span className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-[#e6be74]">
+              HULL INTEGRITY
+            </span>
+            <span
+              className={`text-xl font-display font-bold tabular-nums leading-none ${
+                lowHp ? 'text-[#ff594a]' : 'text-[#fff5e4]'
+              }`}
+              data-testid="hud-hp"
+            >
+              {hud.hp}
+              <span className="text-xs text-[#b8a58e] font-normal">/{hud.maxHp}</span>
+            </span>
+          </div>
+
+          {/* Continuous bar with delayed trailing damage ghost bar */}
+          <div className="relative h-3.5 bg-[#120d0a] border border-[#5e4736] rounded-sm overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 bg-[#ffb052]"
+              style={{ width: `${ghostPct}%` }}
+            />
+            <div
+              className="absolute inset-y-0 left-0 transition-[width] duration-75"
+              style={{
+                width: `${hpPct}%`,
+                backgroundColor: lowHp ? '#e83e32' : '#43d689',
+              }}
+            />
+            {/* Discrete segment notches */}
+            <div className="absolute inset-0 flex justify-between px-[20%] pointer-events-none">
+              <span className="w-[1px] h-full bg-[#120d0a]/60" />
+              <span className="w-[1px] h-full bg-[#120d0a]/60" />
+              <span className="w-[1px] h-full bg-[#120d0a]/60" />
+            </div>
+          </div>
+
+          {/* Dash Thruster Charges */}
+          <div className="mt-2.5 flex items-center justify-between gap-2">
+            <span className="text-[10px] font-display uppercase tracking-[0.18em] text-[#8beeff]">
+              THRUST [SHIFT]
+            </span>
+            <div className="flex gap-1.5 flex-1 max-w-[116px]">
+              {Array.from({ length: hud.maxDashCharges }).map((_, idx) => {
+                const full = idx < hud.dashCharges;
+                const recharging = idx === hud.dashCharges;
+                const fillPct = full ? 100 : recharging ? hud.dashRechargeProgress * 100 : 0;
+                return (
+                  <div
+                    key={idx}
+                    className="h-2 flex-1 bg-[#120d0a] border border-[#45646e] rounded-xs overflow-hidden"
+                  >
+                    <div
+                      className="h-full"
+                      style={{
+                        width: `${fillPct}%`,
+                        backgroundColor: full ? '#45f2ff' : '#2d8fa3',
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* TOP-CENTER CLUSTER: Wave Counter, Hostiles Remaining, Score & Boss Bar */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
+        <div className="flex items-center gap-5 bg-[#211813]/90 border border-[#e6be74]/45 rounded px-5 py-2 shadow-[0_4px_14px_rgba(0,0,0,0.45)]">
+          <div className="text-center">
+            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
+              {isZombies ? 'HORDE' : 'WAVE'}
+            </div>
+            <div className="text-xl font-display font-bold text-[#fff5e4] tabular-nums leading-tight" data-testid="hud-wave">
+              {hud.wave}
+              {hud.totalWaves !== null && (
+                <span className="text-xs text-[#b8a58e]">/{hud.totalWaves}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="w-[1px] h-7 bg-[#5c4635]" />
+
+          <div className="text-center">
+            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#ff9b70]">
+              {isZombies ? 'INFECTED' : 'HOSTILES'}
+            </div>
+            <div className="text-xl font-display font-bold text-[#ffd7c2] tabular-nums leading-tight" data-testid="hud-enemies">
+              {hud.enemiesRemaining}
+            </div>
+          </div>
+
+          <div className="w-[1px] h-7 bg-[#5c4635]" />
+
+          <div className="text-center min-w-[76px]">
+            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
+              SCORE
+            </div>
+            <div className="text-xl font-display font-bold text-[#ffe89e] tabular-nums leading-tight" data-testid="hud-score">
+              {hud.score.toLocaleString()}
+            </div>
+          </div>
+
+          {hud.combo >= 2 && (
+            <>
+              <div className="w-[1px] h-7 bg-[#5c4635]" />
+              <div className="text-center">
+                <div className="text-[10px] font-display uppercase tracking-[0.18em] text-[#45f2ff]">
+                  CHAIN
+                </div>
+                <div className="text-xl font-display font-bold text-[#45f2ff] tabular-nums leading-tight">
+                  ×{hud.combo}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Active Open-World Region Badge */}
+        <div
+          className="px-3.5 py-1 rounded bg-[#18141c]/90 border text-[10px] font-display font-bold uppercase tracking-[0.2em]"
+          style={{ borderColor: `${zoneInfo.accentHex}77`, color: zoneInfo.accentHex }}
+          data-testid="hud-zone"
+        >
+          {hud.zoneName} · {zoneInfo.subtitle}
+        </div>
+
+        {/* Boss Vitality Bar (Wave 5 Shogun Mk-IV) */}
+        {hud.bossMaxHp > 0 && (
+          <div className="w-[340px] sm:w-[420px] bg-[#241412]/92 border border-[#ff6b4a]/70 rounded px-3.5 py-2 shadow-[0_4px_16px_rgba(0,0,0,0.55)]">
+            <div className="flex justify-between items-baseline mb-1">
+              <span className="text-xs font-display font-bold uppercase tracking-[0.22em] text-[#ff9370]">
+                BOSS · {hud.bossName}
+              </span>
+              <span className="text-xs font-display font-bold tabular-nums text-[#ffe6db]">
+                {hud.bossHp} / {hud.bossMaxHp}
+              </span>
+            </div>
+            <div className="h-2.5 bg-[#120908] rounded-xs overflow-hidden border border-[#6e2d24]">
+              <div
+                className="h-full bg-[#e84133]"
+                style={{ width: `${Math.max(0, (hud.bossHp / hud.bossMaxHp) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Brief Non-Blocking Zone Transition or Wave Callout Banner */}
+        {hud.zoneBannerTimer > 0 ? (
+          <div
+            className="mt-1 px-4 py-1.5 rounded bg-[#18141c]/92 border text-center"
+            style={{ borderColor: zoneInfo.accentHex }}
+          >
+            <div
+              className="text-xs sm:text-sm font-display font-bold tracking-[0.22em] uppercase"
+              style={{ color: zoneInfo.accentHex }}
+            >
+              ENTERING {hud.zoneName}
+            </div>
+          </div>
+        ) : hud.waveBannerTimer > 0 ? (
+          <div className="mt-1 px-4 py-1.5 rounded bg-[#211813]/88 border border-[#f2c66d]/60 text-center">
+            <div className="text-xs sm:text-sm font-display font-bold tracking-[0.22em] uppercase text-[#ffe49e]">
+              {hud.waveTitle}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* TOP-RIGHT CLUSTER: Utility Buttons (Night/Day [N], Mute [M], Pause [P], Restart) */}
+      <div className="fixed top-4 right-4 sm:top-5 sm:right-5 flex items-center gap-2">
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={isNight ? 'Switch to Day Mode' : 'Switch to Night Mode'}
+          title="Night / Day [N]"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onToggleTimeOfDay();
+          }}
+          className="pointer-events-auto w-10 h-10 flex items-center justify-center rounded bg-[#211813]/90 border border-[#e6be74]/40 text-[#f5efe6] hover:bg-[#35261d] hover:border-[#ffd782] transition-colors cursor-pointer"
+        >
+          {isNight ? (
+            <svg viewBox="0 0 24 24" className="w-5 h-5 text-[#8cb8ff]" fill="currentColor">
+              <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" className="w-5 h-5 text-[#ffd76e]" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+            </svg>
+          )}
+        </button>
+
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={hud.muted ? 'Unmute audio' : 'Mute audio'}
+          title="Mute [M]"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onToggleMute();
+          }}
+          className="pointer-events-auto w-10 h-10 flex items-center justify-center rounded bg-[#211813]/90 border border-[#e6be74]/40 text-[#f5efe6] hover:bg-[#35261d] hover:border-[#ffd782] transition-colors cursor-pointer"
+        >
+          {hud.muted ? (
+            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <path d="M22 9l-6 6M16 9l6 6" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z" />
+              <path d="M15.5 8.5a5 5 0 010 7" />
+            </svg>
+          )}
+        </button>
+
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Pause game"
+          title="Pause [Esc / P]"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onPause();
+          }}
+          className="pointer-events-auto w-10 h-10 flex items-center justify-center rounded bg-[#211813]/90 border border-[#e6be74]/40 text-[#f5efe6] hover:bg-[#35261d] hover:border-[#ffd782] transition-colors cursor-pointer"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5" fill="currentColor">
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+        </button>
+
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label="Restart run"
+          title="Restart"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onRestart();
+          }}
+          className="pointer-events-auto w-10 h-10 flex items-center justify-center rounded bg-[#211813]/90 border border-[#e6be74]/40 text-[#f5efe6] hover:bg-[#35261d] hover:border-[#ffd782] transition-colors cursor-pointer"
+        >
+          <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+            <path d="M3 3v5h5" />
+          </svg>
+        </button>
+      </div>
+
+      {/* BOTTOM-LEFT CLUSTER: Live 4-Region Open-World Highway Radar */}
+      <div className="fixed bottom-4 left-4 sm:bottom-5 sm:left-5 hidden sm:block">
+        <div className="bg-[#18141c]/92 border border-[#e6be74]/45 rounded p-2 shadow-[0_4px_14px_rgba(0,0,0,0.5)]">
+          <svg
+            viewBox={`0 0 ${mapSize} ${mapSize}`}
+            className="w-[136px] h-[136px] block bg-[#233622] rounded-xs"
+            aria-label="Open world highway radar"
+          >
+            {/* Biome Quadrants */}
+            {/* North: Kopenhime Snowpeak (z < -44) */}
+            <rect x="0" y="0" width={mapSize} height={toMapY(-44)} fill="#6a8599" />
+            {/* West: Aurora City (x < -44) */}
+            <rect x="0" y={toMapY(-44)} width={toMapX(-44)} height={mapSize - toMapY(-44)} fill="#223047" />
+            {/* East: Fungi Forest (x > 44) */}
+            <rect
+              x={toMapX(44)}
+              y={toMapY(-44)}
+              width={mapSize - toMapX(44)}
+              height={mapSize - toMapY(-44)}
+              fill="#223b32"
+            />
+
+            {/* Connected Multi-Highway Road Grid */}
+            <g fill="#42474f">
+              {/* E-W Highways */}
+              {[13.8, 56, 96, -24, -66, -104, -134].map((rz) => (
+                <rect key={`hz-${rz}`} x="2" y={toMapY(rz) - 1.5} width={mapSize - 4} height="3" />
+              ))}
+              {/* N-S Expressways & Avenues */}
+              {[-132, -102, -68, -26, 28, 76, 122].map((rx) => (
+                <rect key={`vx-${rx}`} x={toMapX(rx) - 1.5} y="2" width="3" height={mapSize - 4} />
+              ))}
+            </g>
+
+            {/* Kuroba Station Landmark */}
+            <rect
+              x={toMapX(-7)}
+              y={toMapY(-16)}
+              width={Math.max(5, toMapX(7) - toMapX(-7))}
+              height={Math.max(4, toMapY(-8) - toMapY(-16))}
+              fill="#e89a45"
+              stroke="#fff0c4"
+              strokeWidth="0.7"
+            />
+
+            {/* Region Labels */}
+            <text x="68" y="10" textAnchor="middle" fill="#e6f7ff" fontSize="6.5" fontFamily="Chakra Petch, sans-serif">
+              SNOWPEAK
+            </text>
+            <text x="6" y="128" fill="#45f2ff" fontSize="6.5" fontFamily="Chakra Petch, sans-serif">
+              AURORA
+            </text>
+            <text x="130" y="128" textAnchor="end" fill="#a3ff5c" fontSize="6.5" fontFamily="Chakra Petch, sans-serif">
+              FUNGI
+            </text>
+
+            {/* Drivable Vehicles */}
+            {hud.minimapVehicles.map((v, idx) => (
+              <rect
+                key={`v-${idx}`}
+                x={toMapX(v.x) - 2.3}
+                y={toMapY(v.z) - 2.3}
+                width="4.6"
+                height="4.6"
+                fill={v.active ? '#45f2ff' : '#ffd447'}
+                stroke="#140e0a"
+                strokeWidth="0.8"
+              />
+            ))}
+
+            {/* Live Enemies */}
+            {hud.minimapEnemies.map((en, idx) => (
+              <circle
+                key={idx}
+                cx={toMapX(en.x)}
+                cy={toMapY(en.z)}
+                r={en.archetype === 'shogun' ? 3.5 : 2.1}
+                fill={en.archetype === 'drone' ? '#e85cff' : '#ff4d3b'}
+                stroke="#140e0a"
+                strokeWidth="0.6"
+              />
+            ))}
+
+            {/* Live Player Direction Arrow */}
+            <g
+              transform={`translate(${toMapX(hud.minimapPlayer.x)}, ${toMapY(
+                hud.minimapPlayer.z,
+              )}) rotate(${(-hud.minimapPlayer.yaw * 180) / Math.PI})`}
+            >
+              <polygon points="0,-5 3.6,4 0,2 -3.6,4" fill="#45f2ff" stroke="#101820" strokeWidth="1" />
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      {/* BOTTOM-RIGHT CLUSTER: Vehicle Speedometer (Driving) OR Weapon Readout (On Foot) */}
+      <div className="fixed bottom-4 right-4 sm:bottom-5 sm:right-5 flex flex-col items-end gap-2">
+        {hud.inVehicle ? (
+          <div
+            className="bg-[#18141c]/94 border-2 border-[#45f2ff]/65 rounded px-4 py-3 min-w-[260px] shadow-[0_6px_18px_rgba(0,0,0,0.55)]"
+            data-testid="vehicle-hud"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-[#45f2ff]">
+                  DRIVING · [E] EXIT
+                </div>
+                <div className="text-sm font-display font-bold uppercase tracking-wider text-[#fff6e6]">
+                  {hud.vehicleName}
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-4xl font-display font-bold tabular-nums leading-none text-[#ffd447]" data-testid="vehicle-speed">
+                  {hud.vehicleSpeedKmh}
+                </span>
+                <span className="text-[11px] font-display font-bold text-[#cbb699] ml-1">KM/H</span>
+              </div>
+            </div>
+
+            <div className="mt-2.5">
+              <div className="flex justify-between text-[10px] font-display uppercase tracking-[0.18em] mb-1">
+                <span className="text-[#e6be74]">CHASSIS INTEGRITY</span>
+                <span className="tabular-nums text-[#fff5e4]" data-testid="vehicle-hp">
+                  {hud.vehicleHp}/{hud.vehicleMaxHp}
+                </span>
+              </div>
+              <div className="h-2 bg-[#0e0c12] border border-[#5c4635] rounded-xs overflow-hidden">
+                <div
+                  className="h-full transition-[width] duration-75"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (hud.vehicleHp / Math.max(1, hud.vehicleMaxHp)) * 100))}%`,
+                    backgroundColor:
+                      hud.vehicleHp / Math.max(1, hud.vehicleMaxHp) > 0.5
+                        ? '#43d689'
+                        : hud.vehicleHp / Math.max(1, hud.vehicleMaxHp) > 0.25
+                          ? '#ffb045'
+                          : '#ff493b',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-2">
+              <div className="flex justify-between text-[10px] font-display uppercase tracking-[0.18em] mb-1">
+                <span className="text-[#8beeff]">NITRO BOOST [SHIFT]</span>
+                <span className="tabular-nums text-[#fff5e4]">{hud.vehicleNitro}%</span>
+              </div>
+              <div className="h-2.5 bg-[#0e0c12] border border-[#3a6070] rounded-xs overflow-hidden">
+                <div
+                  className="h-full transition-[width] duration-75"
+                  style={{
+                    width: `${hud.vehicleNitro}%`,
+                    backgroundColor: hud.vehicleNitro > 25 ? '#45f2ff' : '#ff6b52',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Compact 3-weapon switcher row */}
+            <div className="flex items-center gap-1.5">
+              {WEAPON_ORDER.map((id) => {
+                const spec = WEAPONS[id];
+                const isSelected = hud.weapon === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={`Select ${spec.name} (${spec.slot})`}
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onSelectWeapon(id);
+                    }}
+                    className={`pointer-events-auto flex items-center gap-2 px-2.5 py-1.5 rounded border text-left transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#2e221b]/95 border-[#ffd584] text-[#fff6e6]'
+                        : 'bg-[#1c1410]/85 border-[#5c4635]/70 text-[#b8a58e] hover:border-[#b59466]'
+                    }`}
+                  >
+                    <span className="text-[10px] font-display font-bold opacity-80">[{spec.slot}]</span>
+                    <WeaponIcon id={id} active={isSelected} />
+                    <span className="text-xs font-display font-bold tabular-nums">{hud.ammo[id]}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Active Weapon Hero Readout */}
+            <div className="bg-[#211813]/92 border border-[#e6be74]/45 rounded px-4 py-2.5 min-w-[248px] shadow-[0_4px_14px_rgba(0,0,0,0.45)] flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xs font-display font-bold uppercase tracking-[0.12em] text-[#fff4de]">
+                  {activeSpec.name}
+                </div>
+                <div className="text-[11px] text-[#cbb699]">
+                  {activeSpec.role} · <span className="text-[#f2c46d]">[R] Reload</span>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div
+                  className="text-3xl font-display font-bold tabular-nums leading-none"
+                  style={{ color: currentAmmo <= Math.ceil(currentMagMax * 0.25) ? '#ff6b52' : activeSpec.accentHex }}
+                  data-testid="hud-ammo"
+                >
+                  {currentAmmo}
+                  <span className="text-sm text-[#a8947d] font-normal">/{currentMagMax}</span>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
