@@ -171,24 +171,6 @@ interface RemotePlayerEntity {
   walkPhase: number;
 }
 
-interface TdmBotEntity {
-  id: number;
-  name: string;
-  team: PlayerTeam;
-  rig: HeroRig;
-  badge: THREE.Sprite;
-  x: number;
-  y: number;
-  z: number;
-  yaw: number;
-  hp: number;
-  maxHp: number;
-  respawnTimer: number;
-  patrolIndex: number;
-  shootTimer: number;
-  walkPhase: number;
-}
-
 interface VoxelParticle {
   active: boolean;
   x: number;
@@ -370,7 +352,6 @@ export class VoxelGameEngine {
 
   // Team Deathmatch Multiplayer
   private remotePlayers = new Map<string, RemotePlayerEntity>();
-  private tdmBots: TdmBotEntity[] = [];
   private netBroadcastTimer = 0;
   private tdmRespawnTimer = 0;
 
@@ -1544,9 +1525,6 @@ export class VoxelGameEngine {
   public setGameMode(mode: GameMode): void {
     this.gameMode = mode;
     this.wavePlan = buildWavePlan(1, mode);
-    if (mode !== 'deathmatch') {
-      this.clearTdmBots();
-    }
     this.forceHudEmit = true;
     this.emitHudSnapshot();
   }
@@ -1596,13 +1574,13 @@ export class VoxelGameEngine {
     // Spawn player according to mode & team base
     if (this.gameMode === 'deathmatch') {
       const isRed = multiplayer.localTeam === 'red';
-      const spawnX = isRed ? 0 : 4.0;
-      const spawnZ = isRed ? 7.6 : -16.0;
+      // Red Base (West Crossing): x = -8.0, z = 4.5 facing East
+      // Blue Base (East Crossing): x = 8.0, z = 4.5 facing West
+      const spawnX = isRed ? -8.0 : 8.0;
+      const spawnZ = 4.5;
       this.player = createInitialPlayerState(spawnX, 0.16, spawnZ);
-      this.player.facingYaw = isRed ? 0 : Math.PI;
-      this.initTdmBots();
+      this.player.facingYaw = isRed ? Math.PI / 2 : -Math.PI / 2;
     } else {
-      this.clearTdmBots();
       this.player = createInitialPlayerState(0, 0.16, 7.6);
     }
 
@@ -1794,27 +1772,27 @@ export class VoxelGameEngine {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.clearRect(0, 0, 256, 64);
-      ctx.fillStyle = 'rgba(11, 18, 32, 0.82)';
+      ctx.fillStyle = 'rgba(11, 18, 32, 0.88)';
       ctx.strokeStyle = team === 'red' ? '#ef4444' : '#3b82f6';
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.roundRect(4, 8, 248, 48, 12);
+      ctx.roundRect(6, 8, 244, 48, 12);
       ctx.fill();
       ctx.stroke();
 
-      ctx.fillStyle = team === 'red' ? '#f87171' : '#60a5fa';
-      ctx.font = 'bold 20px "Chakra Petch", sans-serif';
+      ctx.fillStyle = team === 'red' ? '#fca5a5' : '#93c5fd';
+      ctx.font = 'bold 22px "Chakra Petch", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const tag = team === 'red' ? '[RED]' : '[BLUE]';
-      ctx.fillText(`${tag} ${name}`, 128, 32);
+      const tag = team === 'red' ? '🔴 RED' : '🔵 BLUE';
+      ctx.fillText(`${tag} · ${name}`, 128, 32);
     }
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
-    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: true });
     const sprite = new THREE.Sprite(material);
-    sprite.scale.set(1.8, 0.45, 1);
-    sprite.position.set(0, 2.2, 0);
+    sprite.scale.set(1.6, 0.4, 1);
+    sprite.position.set(0, 2.15, 0);
     return sprite;
   }
 
@@ -1828,7 +1806,17 @@ export class VoxelGameEngine {
         jacketColor: isRed ? 'crimson_guard' : 'cobalt_navy',
         visorColor: isRed ? 'crimson_hunt' : 'cyan_pulse',
       });
-      const badge = this.createBadgeSprite(state.name, state.team);
+      // Synchronize initial active weapon visibility
+      for (const id of WEAPON_ORDER) {
+        if (rig.weaponRigs[id]) {
+          rig.weaponRigs[id].root.visible = id === (state.weapon || 'pulse');
+        }
+      }
+      rig.root.position.set(state.x, state.y, state.z);
+      rig.root.rotation.y = state.yaw;
+      rig.root.visible = true;
+
+      const badge = this.createBadgeSprite(state.name || (isRed ? 'Red Operator' : 'Blue Operator'), state.team);
       rig.root.add(badge);
       this.scene.add(rig.root);
 
@@ -1850,6 +1838,12 @@ export class VoxelGameEngine {
       entry.targetY = state.y;
       entry.targetZ = state.z;
       entry.targetYaw = state.yaw;
+      // Synchronize weapon if remote player switched
+      for (const id of WEAPON_ORDER) {
+        if (entry.rig.weaponRigs[id]) {
+          entry.rig.weaponRigs[id].root.visible = id === (state.weapon || 'pulse');
+        }
+      }
     }
   }
 
@@ -1886,66 +1880,6 @@ export class VoxelGameEngine {
     );
   }
 
-  private initTdmBots(): void {
-    this.clearTdmBots();
-    const redLoadout: LoadoutConfig = {
-      ...DEFAULT_LOADOUT,
-      headgear: 'cyber_kabuto',
-      jacketColor: 'crimson_guard',
-      visorColor: 'crimson_hunt',
-      pantsStyle: 'navy_tac',
-    };
-    const blueLoadout: LoadoutConfig = {
-      ...DEFAULT_LOADOUT,
-      headgear: 'ranger_helm',
-      jacketColor: 'cobalt_navy',
-      visorColor: 'cyan_pulse',
-      pantsStyle: 'navy_tac',
-    };
-
-    const botConfigs: Array<{ id: number; name: string; team: PlayerTeam; x: number; z: number }> = [
-      { id: 1, name: 'Red-Striker', team: 'red', x: 3.0, z: 10.0 },
-      { id: 2, name: 'Red-Vanguard', team: 'red', x: -4.0, z: 12.0 },
-      { id: 3, name: 'Blue-Hunter', team: 'blue', x: 5.0, z: -16.0 },
-      { id: 4, name: 'Blue-Sentry', team: 'blue', x: -4.0, z: -14.0 },
-    ];
-
-    for (const cfg of botConfigs) {
-      const isRed = cfg.team === 'red';
-      const rig = buildHeroRig(this.materials, isRed ? redLoadout : blueLoadout);
-      rig.root.position.set(cfg.x, 0.16, cfg.z);
-      rig.root.rotation.y = isRed ? 0 : Math.PI;
-      const badge = this.createBadgeSprite(cfg.name, cfg.team);
-      rig.root.add(badge);
-      this.scene.add(rig.root);
-
-      this.tdmBots.push({
-        id: cfg.id,
-        name: cfg.name,
-        team: cfg.team,
-        rig,
-        badge,
-        x: cfg.x,
-        y: 0.16,
-        z: cfg.z,
-        yaw: isRed ? 0 : Math.PI,
-        hp: 100,
-        maxHp: 100,
-        respawnTimer: 0,
-        patrolIndex: 0,
-        shootTimer: 1.5 + Math.random() * 2.0,
-        walkPhase: Math.random() * Math.PI * 2,
-      });
-    }
-  }
-
-  private clearTdmBots(): void {
-    for (const b of this.tdmBots) {
-      this.scene.remove(b.rig.root);
-    }
-    this.tdmBots = [];
-  }
-
   private updateMultiplayerSync(dt: number): void {
     this.netBroadcastTimer -= dt;
     if (this.netBroadcastTimer <= 0) {
@@ -1959,6 +1893,8 @@ export class VoxelGameEngine {
         hp: this.playerHp,
         maxHp: PLAYER_MAX_HP,
         weapon: this.weapon.active,
+        headgear: this.loadout.headgear,
+        suitColor: this.loadout.jacketColor,
         inVehicle: this.activeVehicle !== null,
         vehicleKind: this.activeVehicle?.state.kind,
         isFiring: this.mouseLeftDown && !this.weapon.reloading && this.weapon.ammo[this.weapon.active] > 0,
@@ -1974,10 +1910,16 @@ export class VoxelGameEngine {
       const dz = rz - rp.rig.root.position.z;
       const dist = Math.hypot(dx, dz);
 
-      rp.rig.root.position.x += dx * Math.min(1, dt * 14);
-      rp.rig.root.position.y += (ry - rp.rig.root.position.y) * Math.min(1, dt * 14);
-      rp.rig.root.position.z += dz * Math.min(1, dt * 14);
-      rp.rig.root.rotation.y = dampAngle(rp.rig.root.rotation.y, rp.targetYaw, 12, dt);
+      // Snap immediately if large difference (such as initial spawn or respawn)
+      if (dist > 6.0) {
+        rp.rig.root.position.set(rx, ry, rz);
+      } else {
+        rp.rig.root.position.x += dx * Math.min(1, dt * 16);
+        rp.rig.root.position.y += (ry - rp.rig.root.position.y) * Math.min(1, dt * 16);
+        rp.rig.root.position.z += dz * Math.min(1, dt * 16);
+      }
+      rp.rig.root.rotation.y = dampAngle(rp.rig.root.rotation.y, rp.targetYaw, 14, dt);
+      rp.rig.rightArm.rotation.x = clamp((rp.state.pitch ?? 0) * 0.55 - 0.1, -0.35, 0.45);
 
       if (dist > 0.05) {
         rp.walkPhase += dt * 10;
@@ -1991,143 +1933,6 @@ export class VoxelGameEngine {
         rp.rig.leftArm.rotation.x *= Math.exp(-10 * dt);
       }
     }
-  }
-
-  private updateTdmBots(dt: number): void {
-    const redWaypoints = [
-      { x: 2, z: 7 },
-      { x: 3, z: 1 },
-      { x: -2, z: -2 },
-      { x: 0, z: -7 },
-    ];
-    const blueWaypoints = [
-      { x: 3, z: -15 },
-      { x: 0, z: -8 },
-      { x: -3, z: -2 },
-      { x: 2, z: 3 },
-    ];
-
-    for (const bot of this.tdmBots) {
-      if (bot.respawnTimer > 0) {
-        bot.respawnTimer -= dt;
-        if (bot.respawnTimer <= 0) {
-          bot.hp = bot.maxHp;
-          bot.rig.root.visible = true;
-          const isRed = bot.team === 'red';
-          bot.x = isRed ? (bot.id === 1 ? 2.5 : -3.5) : (bot.id === 3 ? 4.5 : -3.5);
-          bot.y = 0.16;
-          bot.z = isRed ? 10.0 : -16.0;
-          bot.yaw = isRed ? 0 : Math.PI;
-          bot.rig.root.position.set(bot.x, bot.y, bot.z);
-        }
-        continue;
-      }
-
-      let targetPos: { x: number; y: number; z: number } | null = null;
-      let targetDistSq = 32 * 32;
-
-      // 1. Target local player if on opposite team
-      if (multiplayer.localTeam !== bot.team && this.playerHp > 0 && this.player.invulnTimer <= 0) {
-        const pdx = this.player.x - bot.x;
-        const pdz = this.player.z - bot.z;
-        const dsq = pdx * pdx + pdz * pdz;
-        if (dsq < targetDistSq) {
-          targetDistSq = dsq;
-          targetPos = { x: this.player.x, y: this.player.y, z: this.player.z };
-        }
-      }
-
-      // 2. Target opposing bots
-      for (const other of this.tdmBots) {
-        if (other.team === bot.team || other.hp <= 0 || other.respawnTimer > 0) continue;
-        const odx = other.x - bot.x;
-        const odz = other.z - bot.z;
-        const dsq = odx * odx + odz * odz;
-        if (dsq < targetDistSq) {
-          targetDistSq = dsq;
-          targetPos = { x: other.x, y: other.y, z: other.z };
-        }
-      }
-
-      const waypoints = bot.team === 'red' ? redWaypoints : blueWaypoints;
-      const currentWp = waypoints[bot.patrolIndex % waypoints.length];
-
-      if (targetPos) {
-        const dx = targetPos.x - bot.x;
-        const dz = targetPos.z - bot.z;
-        const dist = Math.hypot(dx, dz);
-        const aimYaw = Math.atan2(dx, dz);
-        bot.yaw = dampAngle(bot.yaw, aimYaw, 8, dt);
-
-        if (dist > 8) {
-          bot.x += Math.sin(bot.yaw) * 3.6 * dt;
-          bot.z += Math.cos(bot.yaw) * 3.6 * dt;
-          bot.walkPhase += dt * 8;
-        }
-
-        bot.shootTimer -= dt;
-        if (bot.shootTimer <= 0 && dist < 28) {
-          bot.shootTimer = 1.4 + Math.random() * 1.6;
-          const projColor = bot.team === 'red' ? 0xff4436 : 0x3b82f6;
-          const spd = 28;
-          const dirX = Math.sin(bot.yaw);
-          const dirZ = Math.cos(bot.yaw);
-          gameAudio.playShoot('pulse');
-          this.spawnProjectile(
-            false,
-            bot.x,
-            bot.y + 0.9,
-            bot.z,
-            dirX * spd,
-            0,
-            dirZ * spd,
-            16,
-            false,
-            projColor,
-            0.05,
-          );
-        }
-      } else {
-        const dx = currentWp.x - bot.x;
-        const dz = currentWp.z - bot.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist < 1.5) {
-          bot.patrolIndex = (bot.patrolIndex + 1) % waypoints.length;
-        } else {
-          const moveYaw = Math.atan2(dx, dz);
-          bot.yaw = dampAngle(bot.yaw, moveYaw, 6, dt);
-          bot.x += Math.sin(bot.yaw) * 3.2 * dt;
-          bot.z += Math.cos(bot.yaw) * 3.2 * dt;
-          bot.walkPhase += dt * 7;
-        }
-      }
-
-      bot.rig.root.position.set(bot.x, bot.y, bot.z);
-      bot.rig.root.rotation.y = bot.yaw;
-      const legSwing = Math.sin(bot.walkPhase) * 0.45;
-      bot.rig.leftLeg.rotation.x = legSwing;
-      bot.rig.rightLeg.rotation.x = -legSwing;
-      bot.rig.leftArm.rotation.x = -legSwing * 0.7;
-    }
-  }
-
-  private respawnTdmBot(bot: TdmBotEntity): void {
-    bot.hp = 0;
-    bot.respawnTimer = 3.0;
-    bot.rig.root.visible = false;
-    this.spawnParticles(
-      bot.x,
-      bot.y + 0.9,
-      bot.z,
-      16,
-      [bot.team === 'red' ? 0xff4436 : 0x3b82f6, 0xffffff],
-      2.5,
-      5.5,
-      0.12,
-      0.22,
-      12,
-      0.5,
-    );
   }
 
   private respawnPlayerInTdm(): void {
@@ -2147,17 +1952,28 @@ export class VoxelGameEngine {
     );
 
     const isRed = multiplayer.localTeam === 'red';
-    const spawnX = isRed ? 0 : 4.0;
-    const spawnZ = isRed ? 7.6 : -16.0;
+    // Red Base (West Crossing): x = -8.0, z = 4.5
+    // Blue Base (East Crossing): x = 8.0, z = 4.5
+    const spawnX = isRed ? -8.0 : 8.0;
+    const spawnZ = 4.5;
     this.player.x = spawnX;
     this.player.y = 0.16;
     this.player.z = spawnZ;
-    this.player.facingYaw = isRed ? 0 : Math.PI;
+    this.player.facingYaw = isRed ? Math.PI / 2 : -Math.PI / 2;
     this.player.vx = 0;
     this.player.vz = 0;
     this.playerHp = PLAYER_MAX_HP;
     this.ghostHp = PLAYER_MAX_HP;
     this.player.invulnTimer = 2.5;
+
+    // Immediately notify peers of respawn location
+    multiplayer.sendLocalState({
+      x: spawnX,
+      y: 0.16,
+      z: spawnZ,
+      yaw: this.player.facingYaw,
+      hp: PLAYER_MAX_HP,
+    });
     this.weapon.ammo[this.weapon.active] = WEAPONS[this.weapon.active].magSize;
 
     const oppTeam: PlayerTeam = isRed ? 'blue' : 'red';
@@ -3246,7 +3062,6 @@ export class VoxelGameEngine {
       this.updateEnemies(dt);
     } else {
       this.updateMultiplayerSync(dt);
-      this.updateTdmBots(dt);
     }
 
     // 6. Projectiles, Pickups, Particles
@@ -4234,41 +4049,6 @@ export class VoxelGameEngine {
                 }
               }
             }
-
-            if (!destroyed) {
-              for (const bot of this.tdmBots) {
-                if (bot.team === multiplayer.localTeam || bot.hp <= 0 || bot.respawnTimer > 0) continue;
-                if (p.y >= bot.y && p.y <= bot.y + PLAYER_HEIGHT + 0.2) {
-                  const bdx = p.x - bot.x;
-                  const bdz = p.z - bot.z;
-                  if (bdx * bdx + bdz * bdz <= 0.65 * 0.65) {
-                    const isHeadshot = p.y > bot.y + 1.25;
-                    const dmg = isHeadshot ? Math.round(p.damage * 1.5) : p.damage;
-                    bot.hp -= dmg;
-                    this.hitmarkerTimer = 0.16;
-                    this.hitmarkerCrit = isHeadshot;
-                    gameAudio.playHit(false, isHeadshot);
-                    this.spawnParticles(p.x, p.y, p.z, 8, [0xff4436, 0xffffff], 2, 4, 0.1, 0.18, 10, 0.3);
-                    if (bot.hp <= 0) {
-                      this.kills++;
-                      this.score += 250;
-                      multiplayer.recordKill(
-                        'You',
-                        multiplayer.localTeam,
-                        bot.name,
-                        bot.team,
-                        this.weapon.active,
-                      );
-                      this.respawnTdmBot(bot);
-                    }
-                    if (!p.piercing) {
-                      destroyed = true;
-                      break;
-                    }
-                  }
-                }
-              }
-            }
           }
         } else {
           // Enemy bolt hits player
@@ -4283,23 +4063,6 @@ export class VoxelGameEngine {
             this.damagePlayer(p.damage, p.vx / len, p.vz / len);
             destroyed = true;
             break;
-          }
-
-          if (this.gameMode === 'deathmatch') {
-            for (const b of this.tdmBots) {
-              if (b.hp <= 0 || b.respawnTimer > 0) continue;
-              const bdx = p.x - b.x;
-              const bdz = p.z - b.z;
-              if (p.y >= b.y && p.y <= b.y + PLAYER_HEIGHT && bdx * bdx + bdz * bdz <= 0.6 * 0.6) {
-                b.hp -= p.damage;
-                this.spawnParticles(p.x, p.y, p.z, 6, [0xff4436, 0xffffff], 1.5, 3.5, 0.08, 0.15, 8, 0.25);
-                if (b.hp <= 0) {
-                  this.respawnTdmBot(b);
-                }
-                destroyed = true;
-                break;
-              }
-            }
           }
         }
       }
@@ -4806,7 +4569,6 @@ export class VoxelGameEngine {
     clearTimeout(this.frameId);
 
     multiplayer.disconnect();
-    this.clearTdmBots();
     for (const [_, rp] of this.remotePlayers) {
       this.scene.remove(rp.rig.root);
     }

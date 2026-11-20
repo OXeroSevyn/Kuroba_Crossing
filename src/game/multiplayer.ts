@@ -99,6 +99,16 @@ export class MultiplayerManager {
     winner: null,
   };
   public killFeed: KillFeedEntry[] = [];
+  public lastLocalState: Partial<RemotePlayerState> = {
+    x: -8.0,
+    y: 0.16,
+    z: 4.5,
+    yaw: Math.PI / 2,
+    hp: 100,
+    maxHp: 100,
+    weapon: 'pulse',
+    anim: 'idle',
+  };
 
   private broadcastTimer: number | null = null;
 
@@ -115,6 +125,16 @@ export class MultiplayerManager {
     this.disconnect();
     this.isHost = true;
     this.localTeam = 'red';
+    this.lastLocalState = {
+      x: -8.0,
+      y: 0.16,
+      z: 4.5,
+      yaw: Math.PI / 2,
+      hp: 100,
+      maxHp: 100,
+      weapon: 'pulse',
+      anim: 'idle',
+    };
     const code =
       customCode?.trim().toLowerCase() ||
       'tdm-' + Math.random().toString(36).substring(2, 6);
@@ -152,6 +172,17 @@ export class MultiplayerManager {
   public async joinGame(code: string): Promise<string> {
     this.disconnect();
     this.isHost = false;
+    this.localTeam = 'blue';
+    this.lastLocalState = {
+      x: 8.0,
+      y: 0.16,
+      z: 4.5,
+      yaw: -Math.PI / 2,
+      hp: 100,
+      maxHp: 100,
+      weapon: 'pulse',
+      anim: 'idle',
+    };
     const cleanCode = code.trim().toLowerCase().replace(/^kuroba-/, '');
     this.roomCode = cleanCode;
     const hostPeerId = `kuroba-${cleanCode}`;
@@ -175,6 +206,8 @@ export class MultiplayerManager {
             this.connections.set(hostPeerId, conn);
             this.callbacks.onConnected?.(id, false);
             this.setupGuestConnection(conn);
+            // Immediately introduce guest to host with starting position
+            this.sendLocalState(this.lastLocalState);
             resolve(cleanCode);
           });
 
@@ -209,7 +242,33 @@ export class MultiplayerManager {
       });
       const assignedTeam: PlayerTeam = redCount <= blueCount ? 'red' : 'blue';
 
-      // Send welcome packet with assigned team and current match score
+      // Host includes ITSELF in the players list sent to the new guest!
+      const hostPlayerState: RemotePlayerState = {
+        id: this.localId,
+        name: this.localName,
+        team: this.localTeam,
+        x: this.lastLocalState.x ?? -8.0,
+        y: this.lastLocalState.y ?? 0.16,
+        z: this.lastLocalState.z ?? 4.5,
+        yaw: this.lastLocalState.yaw ?? Math.PI / 2,
+        pitch: this.lastLocalState.pitch ?? 0,
+        anim: 'idle',
+        hp: this.lastLocalState.hp ?? 100,
+        maxHp: 100,
+        weapon: this.lastLocalState.weapon ?? 'pulse',
+        inVehicle: false,
+        kills: 0,
+        deaths: 0,
+        ping: 0,
+        lastUpdateMs: Date.now(),
+        headgear: this.lastLocalState.headgear,
+        suitColor: this.lastLocalState.suitColor,
+      };
+
+      const existingPlayers = Array.from(this.remotePlayers.values());
+      const allPlayers = [hostPlayerState, ...existingPlayers];
+
+      // Send welcome packet with assigned team, current scores, and all active players
       const welcome: NetworkMessage = {
         type: 'welcome',
         senderId: this.localId,
@@ -217,7 +276,7 @@ export class MultiplayerManager {
         payload: {
           assignedTeam,
           scores: this.scores,
-          players: Array.from(this.remotePlayers.values()),
+          players: allPlayers,
         },
       };
       conn.send(welcome);
@@ -258,6 +317,12 @@ export class MultiplayerManager {
       case 'welcome': {
         if (msg.payload?.assignedTeam) {
           this.localTeam = msg.payload.assignedTeam;
+          this.lastLocalState.team = msg.payload.assignedTeam;
+          if (this.localTeam === 'blue' && (this.lastLocalState.x === undefined || this.lastLocalState.x === -8.0)) {
+            this.lastLocalState.x = 8.0;
+            this.lastLocalState.z = 4.5;
+            this.lastLocalState.yaw = -Math.PI / 2;
+          }
         }
         if (msg.payload?.scores) {
           this.scores = msg.payload.scores;
@@ -265,15 +330,20 @@ export class MultiplayerManager {
         }
         if (Array.isArray(msg.payload?.players)) {
           msg.payload.players.forEach((p: RemotePlayerState) => {
-            this.remotePlayers.set(p.id, p);
-            this.callbacks.onPlayerJoined?.(p);
+            if (p.id && p.id !== this.localId) {
+              this.remotePlayers.set(p.id, p);
+              this.callbacks.onPlayerJoined?.(p);
+            }
           });
         }
+        // Send our state back to host immediately with our confirmed assigned team
+        this.sendLocalState(this.lastLocalState);
         break;
       }
 
       case 'player_state': {
         const p = msg.payload;
+        if (!p || !p.id || p.id === this.localId) break;
         if (p.left) {
           this.remotePlayers.delete(p.id);
           this.callbacks.onPlayerLeft?.(p.id);
@@ -285,9 +355,7 @@ export class MultiplayerManager {
             lastUpdateMs: Date.now(),
           };
           this.remotePlayers.set(p.id, updated);
-          if (!existing) {
-            this.callbacks.onPlayerJoined?.(updated);
-          }
+          this.callbacks.onPlayerJoined?.(updated);
         }
         // If host, forward to other peers
         if (this.isHost) {
@@ -370,15 +438,16 @@ export class MultiplayerManager {
   }
 
   public sendLocalState(state: Partial<RemotePlayerState>): void {
+    this.lastLocalState = { ...this.lastLocalState, ...state, team: this.localTeam };
     const payload: RemotePlayerState = {
       id: this.localId,
       name: this.localName,
       team: this.localTeam,
-      x: state.x ?? 0,
-      y: state.y ?? 0,
-      z: state.z ?? 0,
-      yaw: state.yaw ?? 0,
-      pitch: state.pitch ?? 0,
+      x: state.x ?? this.lastLocalState.x ?? 0,
+      y: state.y ?? this.lastLocalState.y ?? 0.16,
+      z: state.z ?? this.lastLocalState.z ?? 0,
+      yaw: state.yaw ?? this.lastLocalState.yaw ?? 0,
+      pitch: state.pitch ?? this.lastLocalState.pitch ?? 0,
       anim: state.anim ?? 'idle',
       hp: state.hp ?? 100,
       maxHp: state.maxHp ?? 100,
@@ -389,8 +458,8 @@ export class MultiplayerManager {
       deaths: state.deaths ?? 0,
       ping: 0,
       lastUpdateMs: Date.now(),
-      headgear: state.headgear,
-      suitColor: state.suitColor,
+      headgear: state.headgear ?? this.lastLocalState.headgear,
+      suitColor: state.suitColor ?? this.lastLocalState.suitColor,
     };
 
     const msg: NetworkMessage = {
