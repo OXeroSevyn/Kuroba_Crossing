@@ -62,6 +62,7 @@ import type {
   PlayerKinematicsState,
   RunSummary,
   TimeOfDay,
+  VehicleKind,
   VehicleKinematicsState,
   WavePlan,
   WeaponId,
@@ -169,6 +170,8 @@ interface RemotePlayerEntity {
   targetZ: number;
   targetYaw: number;
   walkPhase: number;
+  drivenVehicle?: ActiveVehicle | null;
+  fallbackVehicleRig?: DrivableVehicleRig | null;
 }
 
 interface VoxelParticle {
@@ -1817,6 +1820,11 @@ export class VoxelGameEngine {
       rig.root.visible = true;
 
       const badge = this.createBadgeSprite(state.name || (isRed ? 'Red Operator' : 'Blue Operator'), state.team);
+      if (state.inVehicle) {
+        rig.bodyPivot.visible = false;
+        rig.contactShadow.visible = false;
+        badge.position.set(0, 2.7, 0);
+      }
       rig.root.add(badge);
       this.scene.add(rig.root);
 
@@ -1850,6 +1858,13 @@ export class VoxelGameEngine {
   private removeRemotePlayer(playerId: string): void {
     const entry = this.remotePlayers.get(playerId);
     if (entry) {
+      if (entry.drivenVehicle) {
+        entry.drivenVehicle.rig.driverSeat.visible = false;
+        entry.drivenVehicle.rig.nitroFlame.visible = false;
+      }
+      if (entry.fallbackVehicleRig) {
+        this.scene.remove(entry.fallbackVehicleRig.root);
+      }
       this.scene.remove(entry.rig.root);
       this.remotePlayers.delete(playerId);
     }
@@ -1884,6 +1899,7 @@ export class VoxelGameEngine {
     this.netBroadcastTimer -= dt;
     if (this.netBroadcastTimer <= 0) {
       this.netBroadcastTimer = 0.045;
+      const isDriving = this.activeVehicle !== null;
       multiplayer.sendLocalState({
         x: this.player.x,
         y: this.player.y,
@@ -1895,8 +1911,14 @@ export class VoxelGameEngine {
         weapon: this.weapon.active,
         headgear: this.loadout.headgear,
         suitColor: this.loadout.jacketColor,
-        inVehicle: this.activeVehicle !== null,
-        vehicleKind: this.activeVehicle?.state.kind,
+        inVehicle: isDriving,
+        vehicleId: this.activeVehicle ? this.activeVehicle.state.id : undefined,
+        vehicleKind: this.activeVehicle ? this.activeVehicle.state.kind : undefined,
+        vehicleYaw: this.activeVehicle ? this.activeVehicle.state.yaw : undefined,
+        vehicleSpeed: this.activeVehicle ? this.activeVehicle.state.speed : undefined,
+        vehicleSteerAngle: this.activeVehicle ? this.activeVehicle.state.steerAngle : undefined,
+        vehicleWheelSpin: this.activeVehicle ? this.activeVehicle.state.wheelSpin : undefined,
+        vehicleBoosting: this.activeVehicle ? this.activeVehicle.state.boosting : undefined,
         isFiring: this.mouseLeftDown && !this.weapon.reloading && this.weapon.ammo[this.weapon.active] > 0,
         isReloading: this.weapon.reloading,
       });
@@ -1921,16 +1943,91 @@ export class VoxelGameEngine {
       rp.rig.root.rotation.y = dampAngle(rp.rig.root.rotation.y, rp.targetYaw, 14, dt);
       rp.rig.rightArm.rotation.x = clamp((rp.state.pitch ?? 0) * 0.55 - 0.1, -0.35, 0.45);
 
-      if (dist > 0.05) {
-        rp.walkPhase += dt * 10;
-        const swing = Math.sin(rp.walkPhase) * 0.45;
-        rp.rig.leftLeg.rotation.x = swing;
-        rp.rig.rightLeg.rotation.x = -swing;
-        rp.rig.leftArm.rotation.x = -swing * 0.7;
+      const isDriving = !!rp.state.inVehicle;
+      rp.rig.bodyPivot.visible = !isDriving;
+      rp.rig.contactShadow.visible = !isDriving;
+      rp.badge.position.set(0, isDriving ? 2.7 : 2.15, 0);
+
+      if (isDriving) {
+        // Resolve vehicle
+        const vehId = rp.state.vehicleId;
+        let veh = rp.drivenVehicle;
+        if (!veh || (vehId && veh.state.id !== vehId)) {
+          if (rp.drivenVehicle) {
+            rp.drivenVehicle.rig.driverSeat.visible = false;
+            rp.drivenVehicle.rig.nitroFlame.visible = false;
+          }
+          veh = this.vehicles.find((v) => v.state.id === vehId) || null;
+          rp.drivenVehicle = veh;
+        }
+
+        let targetVehRig: DrivableVehicleRig | null = null;
+        if (veh) {
+          if (rp.fallbackVehicleRig) {
+            rp.fallbackVehicleRig.root.visible = false;
+          }
+          targetVehRig = veh.rig;
+          veh.state.x = rp.rig.root.position.x;
+          veh.state.y = rp.rig.root.position.y;
+          veh.state.z = rp.rig.root.position.z;
+          veh.state.yaw = rp.state.vehicleYaw ?? rp.targetYaw;
+          veh.state.speed = rp.state.vehicleSpeed ?? 0;
+          veh.state.steerAngle = rp.state.vehicleSteerAngle ?? 0;
+          veh.state.wheelSpin = rp.state.vehicleWheelSpin ?? 0;
+          veh.state.boosting = !!rp.state.vehicleBoosting;
+        } else {
+          if (!rp.fallbackVehicleRig) {
+            const kind = (rp.state.vehicleKind as VehicleKind) || 'olive_jeep';
+            rp.fallbackVehicleRig = buildDrivableVehicleRig(kind, this.materials);
+            this.scene.add(rp.fallbackVehicleRig.root);
+          }
+          targetVehRig = rp.fallbackVehicleRig;
+          targetVehRig.root.visible = true;
+        }
+
+        if (targetVehRig) {
+          targetVehRig.root.position.set(
+            rp.rig.root.position.x,
+            rp.rig.root.position.y,
+            rp.rig.root.position.z,
+          );
+          const vYaw = rp.state.vehicleYaw ?? rp.targetYaw;
+          targetVehRig.root.rotation.y = vYaw;
+          const steer = rp.state.vehicleSteerAngle ?? 0;
+          const spd = rp.state.vehicleSpeed ?? 0;
+          targetVehRig.root.rotation.z = -steer * clamp(Math.abs(spd) / 22, 0, 1) * 0.08;
+          targetVehRig.root.rotation.x = rp.state.vehicleBoosting ? -0.045 : 0;
+          targetVehRig.driverSeat.visible = true;
+          targetVehRig.nitroFlame.visible = !!rp.state.vehicleBoosting;
+          targetVehRig.headlightCones.visible = this.timeOfDay === 'night';
+          for (const pivot of targetVehRig.frontWheelSteerPivots) {
+            pivot.rotation.y = steer * 0.45;
+          }
+          for (const wheel of targetVehRig.wheelSpinMeshes) {
+            wheel.rotation.x = rp.state.vehicleWheelSpin ?? 0;
+          }
+        }
       } else {
-        rp.rig.leftLeg.rotation.x *= Math.exp(-10 * dt);
-        rp.rig.rightLeg.rotation.x *= Math.exp(-10 * dt);
-        rp.rig.leftArm.rotation.x *= Math.exp(-10 * dt);
+        if (rp.drivenVehicle) {
+          rp.drivenVehicle.rig.driverSeat.visible = false;
+          rp.drivenVehicle.rig.nitroFlame.visible = false;
+          rp.drivenVehicle = null;
+        }
+        if (rp.fallbackVehicleRig) {
+          rp.fallbackVehicleRig.root.visible = false;
+        }
+
+        if (dist > 0.05) {
+          rp.walkPhase += dt * 10;
+          const swing = Math.sin(rp.walkPhase) * 0.45;
+          rp.rig.leftLeg.rotation.x = swing;
+          rp.rig.rightLeg.rotation.x = -swing;
+          rp.rig.leftArm.rotation.x = -swing * 0.7;
+        } else {
+          rp.rig.leftLeg.rotation.x *= Math.exp(-10 * dt);
+          rp.rig.rightLeg.rotation.x *= Math.exp(-10 * dt);
+          rp.rig.leftArm.rotation.x *= Math.exp(-10 * dt);
+        }
       }
     }
   }
@@ -2318,11 +2415,32 @@ export class VoxelGameEngine {
       this.applyTimeOfDay();
       gameAudio.playPickup();
       this.forceHudEmit = true;
+
+      // Broadcast vehicle exit immediately across network
+      multiplayer.sendLocalState({
+        inVehicle: false,
+        vehicleId: undefined,
+        vehicleKind: undefined,
+        x: this.player.x,
+        y: this.player.y,
+        z: this.player.z,
+        yaw: this.player.facingYaw,
+      });
       return;
     }
 
     if (this.nearbyVehicle && !this.nearbyVehicle.state.destroyed) {
       const v = this.nearbyVehicle;
+      // Prevent entering if another remote player is currently driving this vehicle
+      let drivenByOther = false;
+      for (const [_, rp] of this.remotePlayers) {
+        if (rp.state.inVehicle && (rp.drivenVehicle === v || rp.state.vehicleId === v.state.id)) {
+          drivenByOther = true;
+          break;
+        }
+      }
+      if (drivenByOther) return;
+
       this.activeVehicle = v;
       this.hero.root.visible = false;
       this.hero.muzzleFlash.visible = false;
@@ -2332,6 +2450,22 @@ export class VoxelGameEngine {
       this.applyTimeOfDay();
       gameAudio.playDash();
       this.forceHudEmit = true;
+
+      // Broadcast vehicle entry immediately across network
+      multiplayer.sendLocalState({
+        inVehicle: true,
+        vehicleId: v.state.id,
+        vehicleKind: v.state.kind,
+        vehicleYaw: v.state.yaw,
+        vehicleSpeed: v.state.speed,
+        vehicleSteerAngle: v.state.steerAngle,
+        vehicleWheelSpin: v.state.wheelSpin,
+        vehicleBoosting: v.state.boosting,
+        x: v.state.x,
+        y: v.state.y,
+        z: v.state.z,
+        yaw: v.state.yaw,
+      });
     }
   }
 
@@ -2563,6 +2697,15 @@ export class VoxelGameEngine {
       }
 
       if (v === this.activeVehicle) continue;
+      // Skip if driven by any remote player
+      let drivenByOther = false;
+      for (const [_, rp] of this.remotePlayers) {
+        if (rp.state.inVehicle && (rp.drivenVehicle === v || rp.state.vehicleId === v.state.id)) {
+          drivenByOther = true;
+          break;
+        }
+      }
+      if (drivenByOther) continue;
 
       // Parked vehicle rolls/slides smoothly after crash knockback or mid-speed exit
       if (Math.abs(v.state.speed) > 0.05 || Math.hypot(v.state.vx, v.state.vz) > 0.05) {

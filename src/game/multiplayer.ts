@@ -17,7 +17,13 @@ export interface RemotePlayerState {
   maxHp: number;
   weapon: WeaponId;
   inVehicle: boolean;
+  vehicleId?: string;
   vehicleKind?: string;
+  vehicleYaw?: number;
+  vehicleSpeed?: number;
+  vehicleSteerAngle?: number;
+  vehicleWheelSpin?: number;
+  vehicleBoosting?: boolean;
   kills: number;
   deaths: number;
   ping: number;
@@ -256,7 +262,14 @@ export class MultiplayerManager {
         hp: this.lastLocalState.hp ?? 100,
         maxHp: 100,
         weapon: this.lastLocalState.weapon ?? 'pulse',
-        inVehicle: false,
+        inVehicle: this.lastLocalState.inVehicle ?? false,
+        vehicleId: this.lastLocalState.vehicleId,
+        vehicleKind: this.lastLocalState.vehicleKind,
+        vehicleYaw: this.lastLocalState.vehicleYaw,
+        vehicleSpeed: this.lastLocalState.vehicleSpeed,
+        vehicleSteerAngle: this.lastLocalState.vehicleSteerAngle,
+        vehicleWheelSpin: this.lastLocalState.vehicleWheelSpin,
+        vehicleBoosting: this.lastLocalState.vehicleBoosting,
         kills: 0,
         deaths: 0,
         ping: 0,
@@ -452,8 +465,14 @@ export class MultiplayerManager {
       hp: state.hp ?? 100,
       maxHp: state.maxHp ?? 100,
       weapon: state.weapon ?? 'pulse',
-      inVehicle: state.inVehicle ?? false,
-      vehicleKind: state.vehicleKind,
+      inVehicle: state.inVehicle ?? this.lastLocalState.inVehicle ?? false,
+      vehicleId: state.vehicleId !== undefined ? state.vehicleId : this.lastLocalState.vehicleId,
+      vehicleKind: state.vehicleKind !== undefined ? state.vehicleKind : this.lastLocalState.vehicleKind,
+      vehicleYaw: state.vehicleYaw !== undefined ? state.vehicleYaw : this.lastLocalState.vehicleYaw,
+      vehicleSpeed: state.vehicleSpeed !== undefined ? state.vehicleSpeed : this.lastLocalState.vehicleSpeed,
+      vehicleSteerAngle: state.vehicleSteerAngle !== undefined ? state.vehicleSteerAngle : this.lastLocalState.vehicleSteerAngle,
+      vehicleWheelSpin: state.vehicleWheelSpin !== undefined ? state.vehicleWheelSpin : this.lastLocalState.vehicleWheelSpin,
+      vehicleBoosting: state.vehicleBoosting !== undefined ? state.vehicleBoosting : this.lastLocalState.vehicleBoosting,
       kills: state.kills ?? 0,
       deaths: state.deaths ?? 0,
       ping: 0,
