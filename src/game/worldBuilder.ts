@@ -505,6 +505,39 @@ export function buildKurobaWorld(
       accel: 18,
       radius: 1.75,
     },
+    {
+      id: 'veh_bike_kuroba',
+      kind: 'bike',
+      name: 'Type-01 Cyberbike',
+      x: -7.5,
+      z: 14.8,
+      yaw: -Math.PI * 0.5,
+      maxSpeed: 33,
+      accel: 24,
+      radius: 1.15,
+    },
+    {
+      id: 'veh_bike_aurora',
+      kind: 'bike',
+      name: 'Aurora Neo-Racer',
+      x: -56.0,
+      z: 14.8,
+      yaw: -Math.PI * 0.5,
+      maxSpeed: 35,
+      accel: 26,
+      radius: 1.15,
+    },
+    {
+      id: 'veh_bike_fungi',
+      kind: 'bike',
+      name: 'Fungi Enduro-Bike',
+      x: 74.0,
+      z: 14.8,
+      yaw: -Math.PI * 0.5,
+      maxSpeed: 33,
+      accel: 24,
+      radius: 1.15,
+    },
   ];
 
   // 16. ENEMY SPAWN APPROACH POINTS ACROSS KUROBA CROSSING & ALL 3 CONNECTED REGIONS
@@ -750,26 +783,80 @@ function buildRailwayAndBoardwalk(materials: SharedVoxelMaterials): THREE.Group 
   const TIE_WOOD = 0x513421;
   const TIE_ALT = 0x422a1b;
   const RAIL_STEEL = 0x7b838a;
+  const RAIL_TOP = 0xc2c9d2;
+  const BALLAST = 0x3e4248;
   const BOARDWALK = 0x6f472b;
   const BOARDWALK_EDGE = 0x4e301c;
+  const HAZARD_YELLOW = 0xfacc15;
+  const HAZARD_BLACK = 0x18181b;
+  const SIGNAL_RED = 0xef4444;
 
-  // East-West main railway running across z = 2.0 (x = -46 .. 46)
-  for (let x = -46; x <= 46; x += 0.95) {
-    vb.boxBottom(x, 0.02, 2.0, 0.34, 0.12, 2.5, Math.round(x) % 2 === 0 ? TIE_WOOD : TIE_ALT);
+  // 1. Full continuous East-West railway line across the open world (x = -138 .. 138 at z = 2.0)
+  // Continuous crushed granite ballast gravel bed
+  vb.boxBottom(0, 0.01, 2.0, 276, 0.06, 3.2, BALLAST);
+
+  // Wooden railroad ties / sleepers across entire span
+  for (let x = -137.5; x <= 137.5; x += 0.95) {
+    vb.boxBottom(x, 0.04, 2.0, 0.34, 0.1, 2.5, Math.round(x) % 2 === 0 ? TIE_WOOD : TIE_ALT);
   }
-  // Twin steel rails
-  vb.boxBottom(0, 0.14, 1.25, 92, 0.12, 0.14, RAIL_STEEL, 'metal');
-  vb.boxBottom(0, 0.14, 2.75, 92, 0.12, 0.14, RAIL_STEEL, 'metal');
 
-  // North-South wooden boardwalk connecting station veranda (z = -6.3) across tracks to south road (z = 10.6)
+  // Twin continuous steel rails
+  vb.boxBottom(0, 0.1, 1.25, 276, 0.12, 0.14, RAIL_STEEL, 'metal');
+  vb.boxBottom(0, 0.1, 2.75, 276, 0.12, 0.14, RAIL_STEEL, 'metal');
+  // Polished chrome rail running surface
+  vb.boxBottom(0, 0.22, 1.25, 276, 0.02, 0.08, RAIL_TOP, 'metal');
+  vb.boxBottom(0, 0.22, 2.75, 276, 0.02, 0.08, RAIL_TOP, 'metal');
+
+  // 2. North-South wooden boardwalk connecting station veranda (z = -6.3) across tracks to south road (z = 10.6)
   for (let z = -6.2; z <= 10.4; z += 0.68) {
     vb.boxBottom(0, 0.02, z, 3.4, 0.14, 0.56, Math.round(z * 2) % 2 === 0 ? BOARDWALK : TIE_WOOD);
   }
   vb.boxBottom(-1.72, 0.02, 2.1, 0.18, 0.22, 17.0, BOARDWALK_EDGE);
   vb.boxBottom(1.72, 0.02, 2.1, 0.18, 0.22, 17.0, BOARDWALK_EDGE);
 
-  // Crossing timber planks flush between rails
+  // Crossing timber planks flush between rails at pedestrian boardwalk
   vb.boxBottom(0, 0.06, 2.0, 4.2, 0.16, 1.35, BOARDWALK);
+
+  // 3. Flush asphalt/rubber crossing pads where roads cross the railway (x = -68, -26, 28, 76)
+  const roadCrossings = [-68, -26, 28, 76];
+  for (const rx of roadCrossings) {
+    // Flush asphalt pad between and beside rails for smooth driving
+    vb.boxBottom(rx, 0.04, 2.0, 6.8, 0.14, 1.35, 0x272b30);
+    vb.boxBottom(rx, 0.04, 0.62, 6.8, 0.14, 0.95, 0x272b30);
+    vb.boxBottom(rx, 0.04, 3.38, 6.8, 0.14, 0.95, 0x272b30);
+
+    // Classic Japanese railway crossing signal post (Fumikiri) on both sides of road
+    for (const sx of [rx - 4.2, rx + 4.2]) {
+      // Tall iron signal pole with yellow & black diagonal stripes
+      vb.boxBottom(sx, 0, 4.2, 0.2, 3.6, 0.2, HAZARD_YELLOW);
+      vb.boxBottom(sx, 0.8, 4.2, 0.22, 0.4, 0.22, HAZARD_BLACK);
+      vb.boxBottom(sx, 1.8, 4.2, 0.22, 0.4, 0.22, HAZARD_BLACK);
+      vb.boxBottom(sx, 2.8, 4.2, 0.22, 0.4, 0.22, HAZARD_BLACK);
+
+      // Warning crossbuck (X)
+      vb.boxBottom(sx, 3.2, 4.2, 1.2, 0.14, 0.06, HAZARD_YELLOW);
+      vb.boxBottom(sx, 3.2, 4.2, 0.14, 0.14, 0.08, HAZARD_BLACK);
+
+      // Dual alternating red flashing warning lights
+      vb.boxBottom(sx - 0.35, 2.9, 4.22, 0.22, 0.22, 0.12, SIGNAL_RED, 'emissive');
+      vb.boxBottom(sx + 0.35, 2.9, 4.22, 0.22, 0.22, 0.12, SIGNAL_RED, 'emissive');
+      // Sunshade hoods over lights
+      vb.boxBottom(sx - 0.35, 3.05, 4.26, 0.26, 0.06, 0.16, 0x18181b, 'metal');
+      vb.boxBottom(sx + 0.35, 3.05, 4.26, 0.26, 0.06, 0.16, 0x18181b, 'metal');
+    }
+  }
+
+  // 4. Mountain tunnel portals at eastern and western borders (x = -138, x = 138)
+  for (const tx of [-137.5, 137.5]) {
+    const isWest = tx < 0;
+    // Heavy reinforced stone/concrete tunnel arch mouth
+    vb.boxBottom(tx, 0, 2.0, 3.5, 5.2, 5.6, 0x374151);
+    vb.boxBottom(tx, 0.1, 2.0, 3.8, 4.2, 3.6, 0x111827); // Dark tunnel interior void
+    vb.boxBottom(tx + (isWest ? 1.6 : -1.6), 4.8, 2.0, 0.6, 0.6, 4.8, 0x4b5563);
+    // Glowing tunnel warning lanterns
+    vb.boxBottom(tx + (isWest ? 1.6 : -1.6), 4.2, 0.4, 0.25, 0.25, 0.25, 0xf59e0b, 'emissive');
+    vb.boxBottom(tx + (isWest ? 1.6 : -1.6), 4.2, 3.6, 0.25, 0.25, 0.25, 0xf59e0b, 'emissive');
+  }
 
   return vb.build(materials, { castShadow: false, receiveShadow: true });
 }

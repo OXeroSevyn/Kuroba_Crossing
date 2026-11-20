@@ -28,6 +28,11 @@ import {
   buildC4Mesh,
   buildSentryRig,
   buildDestructiblePropMesh,
+  buildBirdRig,
+  buildSmallAnimalRig,
+  buildVoxelPickupMesh,
+  type BirdRig,
+  type SmallAnimalRig,
   type DrivableHelicopterRig,
   type DrivableVehicleRig,
   type DrivableTankRig,
@@ -161,7 +166,7 @@ interface ActivePickup {
   z: number;
   life: number;
   bobPhase: number;
-  mesh: THREE.Mesh;
+  mesh: THREE.Group;
 }
 
 interface ActiveVehicle {
@@ -455,7 +460,42 @@ export class VoxelGameEngine {
     z: number;
     speed: number;
     dir: number;
+    length: number;
+    hornTimer: number;
   } | null = null;
+
+  // Ambient Wildlife (Flock of Birds & Small Animals)
+  private birds: Array<{
+    rig: BirdRig;
+    x: number;
+    y: number;
+    z: number;
+    targetY: number;
+    speed: number;
+    orbitAngle: number;
+    orbitRadius: number;
+    centerX: number;
+    centerZ: number;
+    state: 'circling' | 'perched' | 'fleeing';
+    stateTimer: number;
+    wingPhase: number;
+  }> = [];
+
+  private smallAnimals: Array<{
+    rig: SmallAnimalRig;
+    x: number;
+    y: number;
+    z: number;
+    vx: number;
+    vz: number;
+    yaw: number;
+    targetYaw: number;
+    state: 'idle' | 'walking' | 'fleeing';
+    stateTimer: number;
+    walkPhase: number;
+  }> = [];
+
+  private bikeThrottleAudioTimer = 0;
 
   // Economy & Buffs
   private overhealth = 0;
@@ -726,6 +766,7 @@ export class VoxelGameEngine {
     this.initTanks();
     this.initDestructibleProps();
     this.initTrain();
+    this.initWildlife();
 
     // Pre-allocate pooled voxel particles, blood splatters, explosions, projectiles & pickups
     this.initParticlePool();
@@ -843,24 +884,24 @@ export class VoxelGameEngine {
       this.scene.background = new THREE.Color(fogHex);
       this.scene.fog = new THREE.FogExp2(fogHex, isCustomize ? 0.0025 : dayFogDensity);
       this.scene.environmentIntensity = 0.85;
-      this.sunLight.color.setHex(0xffd68e);
-      this.sunLight.intensity = 1.65;
-      this.sunLight.position.set(22, 30, 18);
-      this.hemiLight.color.setHex(0x8ecae8);
-      this.hemiLight.groundColor.setHex(0x355427);
-      this.hemiLight.intensity = 0.65;
-      this.rimLight.color.setHex(0x88c8f5);
-      this.rimLight.intensity = 0.35;
-      this.shopWarmLight.intensity = 2.0;
-      this.vendingCyanLight.intensity = 1.0;
-      this.renderer.toneMappingExposure = 0.98;
-      this.materials.emissive.emissiveIntensity = 0.55;
+      this.sunLight.color.setHex(0xfffaed);
+      this.sunLight.intensity = 2.05;
+      this.sunLight.position.set(22, 32, 18);
+      this.hemiLight.color.setHex(0x60a5fa);
+      this.hemiLight.groundColor.setHex(0x22c55e);
+      this.hemiLight.intensity = 0.85;
+      this.rimLight.color.setHex(0x93c5fd);
+      this.rimLight.intensity = 0.38;
+      this.shopWarmLight.intensity = 2.2;
+      this.vendingCyanLight.intensity = 1.2;
+      this.renderer.toneMappingExposure = 1.08;
+      this.materials.emissive.emissiveIntensity = 0.65;
       this.starfieldPoints.visible = false;
       this.flashlight.intensity = 0;
       if (this.bloomPass) {
-        this.bloomPass.strength = 0.06;
-        this.bloomPass.radius = 0.18;
-        this.bloomPass.threshold = 1.02;
+        this.bloomPass.strength = 0.012;
+        this.bloomPass.radius = 0.10;
+        this.bloomPass.threshold = 1.35;
       }
     }
 
@@ -1180,27 +1221,142 @@ export class VoxelGameEngine {
     }
     const trainGroup = new THREE.Group();
     const vb = new VoxelAssembler();
-    vb.boxBottom(0, 0.1, 0, 2.8, 0.65, 14.0, 0x181a1f, 'metal');
-    vb.boxBottom(0, 0.75, 0, 2.9, 2.1, 13.8, 0xf0f3f6);
-    vb.boxBottom(0, 1.25, 0, 2.95, 0.38, 13.85, 0x16a34a);
-    vb.boxBottom(0, 1.7, 0, 2.96, 0.65, 13.2, 0x1e293b, 'metal');
-    vb.boxBottom(0, 1.1, 6.92, 0.65, 0.35, 0.2, 0xfff4dc, 'emissive');
-    vb.boxBottom(0, 1.1, -6.92, 0.65, 0.35, 0.2, 0xef4444, 'emissive');
-    vb.boxBottom(0, 2.85, -2.5, 1.8, 0.45, 3.2, 0x94a3b8, 'metal');
-    vb.boxBottom(0, 2.85, 2.5, 1.8, 0.45, 3.2, 0x94a3b8, 'metal');
-    trainGroup.add(vb.build(this.materials));
 
-    trainGroup.position.set(0, 0.1, -80);
+    // Authentic two-car Japanese commuter train (vintage Enoden emerald green & cream white, sits on the East-West rails at z = 2.0)
+    // Car 1 (lead car, x: -11.2 .. -0.4)
+    vb.boxBottom(-5.8, 0.04, 2.0, 10.4, 0.28, 2.3, 0x181a1f, 'metal');
+    // Steel bogie wheels riding the rails
+    for (const wx of [-9.6, -8.2, -3.4, -2.0]) {
+      vb.boxBottom(wx, 0.08, 1.25, 0.42, 0.32, 0.16, 0x52525b, 'metal');
+      vb.boxBottom(wx, 0.08, 2.75, 0.42, 0.32, 0.16, 0x52525b, 'metal');
+    }
+    // Main cream-white passenger coach body
+    vb.boxBottom(-5.8, 0.32, 2.0, 10.6, 2.1, 2.4, 0xf8fafc);
+    // Lower vintage green livery belt
+    vb.boxBottom(-5.8, 0.54, 2.0, 10.65, 0.45, 2.42, 0x15803d);
+    // Smoked passenger windows with warm interior cabin glow
+    vb.boxBottom(-5.8, 1.26, 2.0, 10.66, 0.62, 2.42, 0x1e293b, 'metal');
+    vb.boxBottom(-5.8, 1.28, 2.0, 10.4, 0.58, 2.44, 0xfef08a, 'emissive');
+    // Dark slate roof
+    vb.boxBottom(-5.8, 2.42, 2.0, 10.8, 0.35, 2.36, 0x475569, 'metal');
+    // Articulated diamond pantograph on roof
+    vb.boxBottom(-8.8, 2.77, 2.0, 1.6, 0.55, 1.4, 0x94a3b8, 'metal');
+    vb.boxBottom(-8.8, 3.32, 2.0, 0.2, 0.08, 1.8, 0xd4d4d8, 'metal');
+
+    // Lead car front bumper & high-beam headlights (facing negative X when moving west)
+    vb.boxBottom(-11.15, 0.85, 1.5, 0.2, 0.3, 0.3, 0xfff3c4, 'emissive');
+    vb.boxBottom(-11.15, 0.85, 2.5, 0.2, 0.3, 0.3, 0xfff3c4, 'emissive');
+    vb.boxBottom(-11.15, 1.85, 2.0, 0.15, 0.25, 0.8, 0xef4444, 'emissive');
+
+    // Flexible rubber gangway accordion coupler between cars
+    vb.boxBottom(0, 0.32, 2.0, 0.8, 2.0, 2.1, 0x1c1917, 'metal');
+
+    // Car 2 (trailer car, x: 0.4 .. 11.2)
+    vb.boxBottom(5.8, 0.04, 2.0, 10.4, 0.28, 2.3, 0x181a1f, 'metal');
+    for (const wx of [2.0, 3.4, 8.2, 9.6]) {
+      vb.boxBottom(wx, 0.08, 1.25, 0.42, 0.32, 0.16, 0x52525b, 'metal');
+      vb.boxBottom(wx, 0.08, 2.75, 0.42, 0.32, 0.16, 0x52525b, 'metal');
+    }
+    vb.boxBottom(5.8, 0.32, 2.0, 10.6, 2.1, 2.4, 0xf8fafc);
+    vb.boxBottom(5.8, 0.54, 2.0, 10.65, 0.45, 2.42, 0x15803d);
+    vb.boxBottom(5.8, 1.26, 2.0, 10.66, 0.62, 2.42, 0x1e293b, 'metal');
+    vb.boxBottom(5.8, 1.28, 2.0, 10.4, 0.58, 2.44, 0xfef08a, 'emissive');
+    vb.boxBottom(5.8, 2.42, 2.0, 10.8, 0.35, 2.36, 0x475569, 'metal');
+    // Trailer car rear pantograph
+    vb.boxBottom(8.8, 2.77, 2.0, 1.6, 0.55, 1.4, 0x94a3b8, 'metal');
+    vb.boxBottom(8.8, 3.32, 2.0, 0.2, 0.08, 1.8, 0xd4d4d8, 'metal');
+    // Trailer rear taillights
+    vb.boxBottom(11.15, 0.85, 1.5, 0.2, 0.25, 0.25, 0xef4444, 'emissive');
+    vb.boxBottom(11.15, 0.85, 2.5, 0.2, 0.25, 0.25, 0xef4444, 'emissive');
+
+    trainGroup.add(vb.build(this.materials));
+    trainGroup.position.set(-60, 0.18, 2.0);
     this.scene.add(trainGroup);
 
     this.trainCar = {
       mesh: trainGroup,
-      x: 0,
-      y: 0.1,
-      z: -80,
-      speed: 9.5,
+      x: -60,
+      y: 0.18,
+      z: 2.0,
+      speed: 15.5,
       dir: 1,
+      length: 23.0,
+      hornTimer: 0,
     };
+  }
+
+  private initWildlife(): void {
+    for (const b of this.birds) this.scene.remove(b.rig.root);
+    for (const a of this.smallAnimals) this.scene.remove(a.rig.root);
+    // 1. Flock of 8 ambient Birds (Pigeons & Crows) circling Kuroba Crossing and perching
+    this.birds = [];
+    const birdSpecs: Array<{ kind: 'pigeon' | 'crow'; radius: number; height: number; speed: number }> = [
+      { kind: 'pigeon', radius: 14, height: 5.5, speed: 4.8 },
+      { kind: 'pigeon', radius: 19, height: 7.2, speed: 5.4 },
+      { kind: 'pigeon', radius: 11, height: 4.2, speed: 4.2 },
+      { kind: 'pigeon', radius: 24, height: 8.8, speed: 5.8 },
+      { kind: 'crow', radius: 16, height: 6.8, speed: 5.0 },
+      { kind: 'crow', radius: 22, height: 9.5, speed: 6.0 },
+      { kind: 'crow', radius: 28, height: 11.2, speed: 6.5 },
+      { kind: 'crow', radius: 13, height: 5.0, speed: 4.5 },
+    ];
+
+    for (let i = 0; i < birdSpecs.length; i++) {
+      const spec = birdSpecs[i];
+      const rig = buildBirdRig(this.materials, spec.kind);
+      const angle = (i / birdSpecs.length) * Math.PI * 2;
+      const x = Math.cos(angle) * spec.radius;
+      const z = 2.0 + Math.sin(angle) * spec.radius;
+      rig.root.position.set(x, spec.height, z);
+      this.scene.add(rig.root);
+
+      this.birds.push({
+        rig,
+        x,
+        y: spec.height,
+        z,
+        targetY: spec.height,
+        speed: spec.speed,
+        orbitAngle: angle,
+        orbitRadius: spec.radius,
+        centerX: 0,
+        centerZ: 2.0,
+        state: 'circling',
+        stateTimer: 6 + Math.random() * 10,
+        wingPhase: i * 1.5,
+      });
+    }
+
+    // 2. Small Animals (3 Japanese Calico Cats, 2 Red Foxes) roaming station gardens and alleys
+    this.smallAnimals = [];
+    const animalSpawns: Array<{ kind: 'cat' | 'fox'; x: number; z: number }> = [
+      { kind: 'cat', x: -6.5, z: -7.2 },
+      { kind: 'cat', x: 7.2, z: 8.5 },
+      { kind: 'cat', x: -2.5, z: 7.8 },
+      { kind: 'fox', x: 18.5, z: -12.0 },
+      { kind: 'fox', x: -18.0, z: -10.5 },
+    ];
+
+    for (let i = 0; i < animalSpawns.length; i++) {
+      const sp = animalSpawns[i];
+      const rig = buildSmallAnimalRig(this.materials, sp.kind);
+      rig.root.position.set(sp.x, 0.03, sp.z);
+      this.scene.add(rig.root);
+
+      this.smallAnimals.push({
+        rig,
+        x: sp.x,
+        y: 0.03,
+        z: sp.z,
+        vx: 0,
+        vz: 0,
+        yaw: Math.random() * Math.PI * 2,
+        targetYaw: Math.random() * Math.PI * 2,
+        state: 'idle',
+        stateTimer: 3 + Math.random() * 5,
+        walkPhase: i * 2.0,
+      });
+    }
   }
 
   private resetVehicles(): void {
@@ -1669,18 +1825,13 @@ export class VoxelGameEngine {
   }
 
   private initPickupPool(): void {
-    const geo = new THREE.OctahedronGeometry(0.32, 0);
     for (let i = 0; i < 16; i++) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x4ef2a1,
-        emissive: 0x2fd682,
-        emissiveIntensity: 0.9,
-        roughness: 0.25,
-        metalness: 0.4,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.visible = false;
-      this.scene.add(mesh);
+      const group = new THREE.Group();
+      const healMesh = buildVoxelPickupMesh('heal', this.materials);
+      const odMesh = buildVoxelPickupMesh('overdrive', this.materials);
+      group.add(healMesh, odMesh);
+      group.visible = false;
+      this.scene.add(group);
       this.pickups.push({
         active: false,
         kind: 'heal',
@@ -1689,7 +1840,7 @@ export class VoxelGameEngine {
         z: 0,
         life: 0,
         bobPhase: i * 1.1,
-        mesh,
+        mesh: group,
       });
     }
   }
@@ -3686,7 +3837,25 @@ export class VoxelGameEngine {
     // Apply visual rig transform, wheel spin, steering angle, body lean & nitro exhaust
     v.rig.root.position.set(v.state.x, v.state.y, v.state.z);
     v.rig.root.rotation.y = v.state.yaw;
-    v.rig.root.rotation.z = -v.state.steerAngle * clamp(Math.abs(v.state.speed) / 22, 0, 1) * 0.08;
+    const isBike = v.state.kind === 'bike';
+    if (isBike) {
+      // Dynamic motorcycle lean into corners!
+      const bikeLean = -v.state.steerAngle * clamp(Math.abs(v.state.speed) / 10, 0.2, 1.0) * 0.48;
+      v.rig.chassis.rotation.z = bikeLean;
+      v.rig.root.rotation.z = 0;
+      // High-revving motorcycle throttle audio
+      if (throttle !== 0) {
+        this.bikeThrottleAudioTimer += dt;
+        if (this.bikeThrottleAudioTimer > 0.08) {
+          this.bikeThrottleAudioTimer = 0;
+          const rpm = 1.0 + (Math.abs(v.state.speed) / (v.state.maxSpeed || 32)) * 1.8;
+          gameAudio.playBikeEngine(rpm);
+        }
+      }
+    } else {
+      v.rig.chassis.rotation.z = 0;
+      v.rig.root.rotation.z = -v.state.steerAngle * clamp(Math.abs(v.state.speed) / 22, 0, 1) * 0.08;
+    }
     v.rig.root.rotation.x = v.state.boosting ? -0.045 : throttle * -0.015;
 
     for (const pivot of v.rig.frontWheelSteerPivots) {
@@ -4518,25 +4687,208 @@ export class VoxelGameEngine {
   private updateTrain(dt: number): void {
     if (!this.trainCar) return;
     const t = this.trainCar;
-    t.z += t.speed * t.dir * dt;
-    if (t.z > 120) {
+    t.x += t.speed * t.dir * dt;
+    if (t.x > 134) {
       t.dir = -1;
       t.mesh.rotation.y = Math.PI;
-    } else if (t.z < -120) {
+    } else if (t.x < -134) {
       t.dir = 1;
       t.mesh.rotation.y = 0;
     }
-    t.mesh.position.set(t.x, t.y, t.z);
+    t.mesh.position.set(t.x, t.y, 2.0);
 
-    if (
-      !this.activeVehicle &&
-      !this.activeHelicopter &&
-      !this.activeTank &&
-      Math.abs(this.player.x - t.x) < 1.6 &&
-      Math.abs(this.player.z - t.z) < 7.2 &&
-      this.player.y >= 2.5
-    ) {
-      this.player.z += t.speed * t.dir * dt;
+    // Periodic authentic warning horn near major crossings and station
+    t.hornTimer -= dt;
+    if (t.hornTimer <= 0) {
+      const nearKuroba = Math.abs(t.x) < 22;
+      const nearAurora = Math.abs(t.x - (-68)) < 16;
+      const nearFungi = Math.abs(t.x - 28) < 16;
+      if (nearKuroba || nearAurora || nearFungi) {
+        gameAudio.playTrainHorn();
+        t.hornTimer = 9.0;
+      }
+    }
+
+    const halfLen = t.length * 0.5;
+
+    // 1. Train vs Player Interaction (Lethal Hit or Rooftop Riding)
+    const pDistZ = Math.abs(this.player.z - 2.0);
+    const pDistX = Math.abs(this.player.x - t.x);
+
+    if (pDistZ < 1.65 && pDistX < halfLen + 0.8) {
+      if (this.player.y >= 2.5) {
+        // Player smoothly rides the train car roof!
+        this.player.x += t.speed * t.dir * dt;
+      } else if (!this.activeVehicle && !this.activeHelicopter && !this.activeTank) {
+        // LETHAL TRAIN HIT: Moving train deals fatal damage and flings player off tracks!
+        const knockZ = this.player.z < 2.0 ? -14.0 : 14.0;
+        const knockX = t.dir * 18.0;
+        this.damagePlayer(1000, knockX, knockZ);
+        gameAudio.playCrash(1.0);
+        gameAudio.playTrainHorn();
+        this.trauma = 1.0;
+        this.spawnParticles(
+          this.player.x,
+          this.player.y + 0.9,
+          this.player.z,
+          24,
+          [0xef4444, 0xb91c1c, 0xfacc15, 0xffffff],
+          3.5,
+          8.5,
+          0.12,
+          0.26,
+          22,
+          0.6,
+        );
+      }
+    }
+
+    // 2. Train vs Ground Vehicles (Cars, Jeeps, Cyberbikes)
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (v.state.destroyed) continue;
+      const vDistZ = Math.abs(v.state.z - 2.0);
+      const vDistX = Math.abs(v.state.x - t.x);
+      if (vDistZ < 1.85 && vDistX < halfLen + 1.2) {
+        // Devastating collision: flings vehicle off rails and triggers fiery explosion!
+        v.state.hp = 0;
+        v.state.destroyed = true;
+        v.state.vx += t.dir * 26;
+        v.state.vz += v.state.z < 2.0 ? -18 : 18;
+        this.triggerExplosion(v.state.x, v.state.y + 0.6, v.state.z, 6.5, 300);
+        gameAudio.playCrash(1.0);
+      }
+    }
+
+    // 3. Train vs Tanks
+    for (let i = 0; i < this.tanks.length; i++) {
+      const tk = this.tanks[i];
+      if (tk.state.destroyed) continue;
+      const tDistZ = Math.abs(tk.state.z - 2.0);
+      const tDistX = Math.abs(tk.state.x - t.x);
+      if (tDistZ < 2.1 && tDistX < halfLen + 1.4) {
+        tk.state.hp = Math.max(0, tk.state.hp - 250);
+        tk.state.vx += t.dir * 14;
+        tk.state.vz += tk.state.z < 2.0 ? -10 : 10;
+        this.triggerExplosion(tk.state.x, tk.state.y + 0.8, tk.state.z, 5.0, 150);
+        gameAudio.playCrash(1.0);
+      }
+    }
+
+    // 4. Train vs Enemies (Zombies on the tracks get squashed!)
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      if (Math.abs(e.z - 2.0) < 1.7 && Math.abs(e.x - t.x) < halfLen + 0.6) {
+        e.hp = 0;
+        this.spawnParticles(e.x, e.y + 0.5, e.z, 16, [0xef4444, 0x881337], 3.0, 7.0, 0.1, 0.22, 18, 0.5);
+        gameAudio.playFleshHit();
+      }
+    }
+  }
+
+  private updateWildlife(dt: number): void {
+    // 1. Birds flight & startled reaction
+    for (let i = 0; i < this.birds.length; i++) {
+      const b = this.birds[i];
+      b.wingPhase += dt * (b.state === 'fleeing' ? 24 : 14);
+
+      // Check distance to player or active vehicle for flee trigger
+      const distToPlayer = Math.hypot(b.x - this.player.x, b.z - this.player.z);
+      if ((distToPlayer < 9.0 || this.trauma > 0.3) && b.state !== 'fleeing') {
+        b.state = 'fleeing';
+        b.stateTimer = 4.5;
+        b.targetY = 18.0;
+        if (i % 3 === 0) gameAudio.playBirdChirp();
+      }
+
+      if (b.state === 'fleeing') {
+        b.stateTimer -= dt;
+        b.y += (b.targetY - b.y) * 1.8 * dt;
+        b.orbitAngle += (b.speed * 1.5 * dt) / Math.max(5, b.orbitRadius);
+        if (b.stateTimer <= 0) {
+          b.state = 'circling';
+          b.targetY = 5.0 + Math.random() * 4.0;
+        }
+      } else {
+        b.orbitAngle += (b.speed * dt) / Math.max(5, b.orbitRadius);
+        b.y += (b.targetY - b.y) * 0.8 * dt;
+      }
+
+      b.x = b.centerX + Math.cos(b.orbitAngle) * b.orbitRadius;
+      b.z = b.centerZ + Math.sin(b.orbitAngle) * b.orbitRadius;
+
+      const yaw = b.orbitAngle + Math.PI * 0.5;
+      b.rig.root.position.set(b.x, b.y, b.z);
+      b.rig.root.rotation.set(0, -yaw, Math.sin(b.wingPhase) * 0.08);
+
+      const flap = Math.sin(b.wingPhase) * 0.75;
+      b.rig.leftWing.rotation.z = flap;
+      b.rig.rightWing.rotation.z = -flap;
+    }
+
+    // 2. Small Animals (Cats & Foxes) wandering & scurrying
+    for (let i = 0; i < this.smallAnimals.length; i++) {
+      const a = this.smallAnimals[i];
+      a.stateTimer -= dt;
+
+      const distToPlayer = Math.hypot(a.x - this.player.x, a.z - this.player.z);
+      const isPlayerThreat = distToPlayer < 5.5 || (distToPlayer < 10.0 && Boolean(this.activeVehicle));
+      if (isPlayerThreat && a.state !== 'fleeing') {
+        a.state = 'fleeing';
+        a.stateTimer = 3.5;
+        a.targetYaw = Math.atan2(a.x - this.player.x, a.z - this.player.z);
+        if (i === 0) gameAudio.playAnimalScurry();
+      }
+
+      if (a.state === 'fleeing') {
+        a.yaw = a.targetYaw;
+        const fleeSpeed = a.rig.kind === 'fox' ? 8.5 : 6.8;
+        a.vx = Math.sin(a.yaw) * fleeSpeed;
+        a.vz = Math.cos(a.yaw) * fleeSpeed;
+        a.walkPhase += dt * 18;
+        if (a.stateTimer <= 0) {
+          a.state = 'idle';
+          a.stateTimer = 4 + Math.random() * 4;
+          a.vx = 0;
+          a.vz = 0;
+        }
+      } else if (a.stateTimer <= 0) {
+        if (a.state === 'idle') {
+          a.state = 'walking';
+          a.stateTimer = 2.5 + Math.random() * 4.0;
+          a.targetYaw = Math.random() * Math.PI * 2;
+        } else {
+          a.state = 'idle';
+          a.stateTimer = 3.0 + Math.random() * 5.0;
+          a.vx = 0;
+          a.vz = 0;
+        }
+      }
+
+      if (a.state === 'walking') {
+        a.yaw += (a.targetYaw - a.yaw) * (1 - Math.exp(-6 * dt));
+        const walkSpeed = a.rig.kind === 'fox' ? 2.4 : 1.6;
+        a.vx = Math.sin(a.yaw) * walkSpeed;
+        a.vz = Math.cos(a.yaw) * walkSpeed;
+        a.walkPhase += dt * 10;
+      }
+
+      a.x += a.vx * dt;
+      a.z += a.vz * dt;
+      a.x = clamp(a.x, -26, 26);
+      a.z = clamp(a.z, -16, 26);
+
+      a.rig.root.position.set(a.x, a.y, a.z);
+      a.rig.root.rotation.y = a.yaw;
+
+      const legSwing = (a.state === 'walking' || a.state === 'fleeing') ? Math.sin(a.walkPhase) * 0.65 : 0;
+      if (a.rig.legs.length >= 4) {
+        a.rig.legs[0].rotation.x = legSwing;
+        a.rig.legs[1].rotation.x = -legSwing;
+        a.rig.legs[2].rotation.x = -legSwing;
+        a.rig.legs[3].rotation.x = legSwing;
+      }
+      a.rig.tail.rotation.y = Math.sin(this.titleClock * 3.2 + i) * 0.35;
     }
   }
 
@@ -5097,6 +5449,7 @@ export class VoxelGameEngine {
     this.updateC4(dt);
     this.updateSentries(dt);
     this.updateTrain(dt);
+    this.updateWildlife(dt);
     this.updateShockwaves(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
@@ -6288,13 +6641,9 @@ export class VoxelGameEngine {
     slot.y = 0.65;
     slot.z = z;
     slot.life = 14;
-    const mat = slot.mesh.material as THREE.MeshStandardMaterial;
-    if (kind === 'heal') {
-      mat.color.setHex(0x4ef2a1);
-      mat.emissive.setHex(0x28c778);
-    } else {
-      mat.color.setHex(0xffc845);
-      mat.emissive.setHex(0xe89420);
+    if (slot.mesh.children.length >= 2) {
+      slot.mesh.children[0].visible = kind === 'heal';
+      slot.mesh.children[1].visible = kind === 'overdrive';
     }
     slot.mesh.position.set(x, 0.65, z);
     slot.mesh.visible = true;
@@ -6752,6 +7101,12 @@ export class VoxelGameEngine {
     }
     if (this.trainCar) {
       this.scene.remove(this.trainCar.mesh);
+    }
+    for (const b of this.birds) {
+      this.scene.remove(b.rig.root);
+    }
+    for (const a of this.smallAnimals) {
+      this.scene.remove(a.rig.root);
     }
 
     for (const h of this.helicopters) {

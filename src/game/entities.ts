@@ -417,6 +417,12 @@ function buildDetailedWeapons(
   railRoot.add(railBolt);
   railRoot.visible = false;
 
+  const rpgRoot = buildRpgMesh(materials);
+  rpgRoot.visible = false;
+
+  const katanaRoot = buildKatanaMesh(materials);
+  katanaRoot.visible = false;
+
   return {
     pulse: {
       root: pulseRoot,
@@ -440,14 +446,14 @@ function buildDetailedWeapons(
       ejectOffset: new THREE.Vector3(-0.12, -0.06, 0.46),
     },
     rpg: {
-      root: buildRpgMesh(materials),
+      root: rpgRoot,
       magazine: new THREE.Group(),
       boltOrPump: new THREE.Group(),
       muzzleOffsetZ: 0.95,
       ejectOffset: new THREE.Vector3(0, 0, 0),
     },
     katana: {
-      root: buildKatanaMesh(materials),
+      root: katanaRoot,
       magazine: new THREE.Group(),
       boltOrPump: new THREE.Group(),
       muzzleOffsetZ: 0.75,
@@ -1358,6 +1364,49 @@ export function buildDrivableVehicleRig(
     driverZ = -0.05;
     exhaustZ = -1.78;
     headlightZ = 1.8;
+  } else if (kind === 'bike') {
+    // Type-01 Neo Cyberbike (futuristic agile sports street bike)
+    const FRAME = 0x181a20;
+    const FAIRING = 0x06b6d4; // Cyan aerodynamic fairing panels
+    const ACCENT = 0xf97316; // Orange speed accent graphics
+    const NEON = 0x22d3ee; // Glowing instrumentation and rim ring
+    // Front fairing cowl and windscreen
+    vb.boxBottom(0, 0.42, 0.35, 0.42, 0.54, 0.95, FAIRING);
+    vb.boxBottom(0, 0.88, 0.48, 0.36, 0.32, 0.48, GLASS, 'metal');
+    // Dual aggressive LED projector headlights
+    vb.boxBottom(-0.14, 0.62, 0.86, 0.12, 0.12, 0.06, HEADLIGHT, 'emissive');
+    vb.boxBottom(0.14, 0.62, 0.86, 0.12, 0.12, 0.06, HEADLIGHT, 'emissive');
+    // Digital cockpit telemetry screen
+    vb.boxBottom(0, 0.94, 0.44, 0.22, 0.12, 0.04, NEON, 'emissive');
+    // Clip-on racing handlebars & bar-end mirrors
+    vb.boxBottom(-0.32, 0.82, 0.42, 0.28, 0.06, 0.06, 0x111317, 'metal');
+    vb.boxBottom(0.32, 0.82, 0.42, 0.28, 0.06, 0.06, 0x111317, 'metal');
+    // Main trellis engine frame & battery block
+    vb.boxBottom(0, 0.26, -0.1, 0.38, 0.52, 0.92, FRAME, 'metal');
+    vb.boxBottom(0, 0.32, -0.1, 0.42, 0.12, 0.82, ACCENT);
+    // Ergonomic racing saddle
+    vb.boxBottom(0, 0.66, -0.32, 0.34, 0.12, 0.55, 0x0f1115);
+    // Aerodynamic tail cowl & razor taillight
+    vb.boxBottom(0, 0.64, -0.85, 0.36, 0.28, 0.58, FAIRING);
+    vb.boxBottom(0, 0.72, -1.15, 0.28, 0.08, 0.04, TAILLIGHT, 'emissive');
+    // Upswept carbon exhaust canister
+    vb.boxBottom(0.24, 0.44, -0.88, 0.14, 0.14, 0.72, 0x27272a, 'metal');
+    vb.boxBottom(0.24, 0.44, -1.25, 0.12, 0.12, 0.04, 0x38bdf8, 'emissive');
+    // Front suspension inverted telescopic fork
+    vb.boxBottom(-0.16, 0.24, 0.88, 0.08, 0.54, 0.08, 0xd4d4d8, 'metal');
+    vb.boxBottom(0.16, 0.24, 0.88, 0.08, 0.54, 0.08, 0xd4d4d8, 'metal');
+    // Rear aluminum swingarm
+    vb.boxBottom(-0.16, 0.22, -0.72, 0.07, 0.16, 0.68, 0x52525b, 'metal');
+    vb.boxBottom(0.16, 0.22, -0.72, 0.07, 0.16, 0.68, 0x52525b, 'metal');
+
+    wheelZFront = 1.05;
+    wheelZRear = -1.05;
+    wheelX = 0;
+    wheelSize = 0.68;
+    driverY = 0.56;
+    driverZ = -0.22;
+    exhaustZ = -1.25;
+    headlightZ = 0.95;
   } else {
     // snow_patrol (Kopenhime Alpine Rescue Truck)
     const SNOW = 0xe8eff5;
@@ -1387,35 +1436,50 @@ export function buildDrivableVehicleRig(
   chassis.add(vb.build(materials));
 
   // Build 4 articulated wheels (front 2 steer + spin, rear 2 spin)
+  const isBike = kind === 'bike';
   const frontWheelSteerPivots: THREE.Group[] = [];
   const wheelSpinMeshes: THREE.Group[] = [];
-  const wheelSpecs: Array<{ x: number; z: number; isFront: boolean }> = [
-    { x: -wheelX, z: wheelZFront, isFront: true },
-    { x: wheelX, z: wheelZFront, isFront: true },
-    { x: -wheelX, z: wheelZRear, isFront: false },
-    { x: wheelX, z: wheelZRear, isFront: false },
-  ];
+  const wheelSpecs: Array<{ x: number; z: number; isFront: boolean; isDummy?: boolean }> = isBike
+    ? [
+        { x: 0, z: wheelZFront, isFront: true },
+        { x: 0, z: wheelZFront, isFront: true, isDummy: true },
+        { x: 0, z: wheelZRear, isFront: false },
+        { x: 0, z: wheelZRear, isFront: false, isDummy: true },
+      ]
+    : [
+        { x: -wheelX, z: wheelZFront, isFront: true },
+        { x: wheelX, z: wheelZFront, isFront: true },
+        { x: -wheelX, z: wheelZRear, isFront: false },
+        { x: wheelX, z: wheelZRear, isFront: false },
+      ];
 
   for (const w of wheelSpecs) {
     const steerPivot = new THREE.Group();
     steerPivot.position.set(w.x, wheelSize * 0.5, w.z);
     const spinGroup = new THREE.Group();
-    const wAsm = new VoxelAssembler();
-    wAsm.boxBottom(0, -wheelSize * 0.5, 0, 0.34, wheelSize, wheelSize, TIRE);
-    wAsm.boxBottom(
-      w.x > 0 ? 0.14 : -0.14,
-      -wheelSize * 0.22,
-      0,
-      0.1,
-      wheelSize * 0.44,
-      wheelSize * 0.44,
-      HUB,
-      'metal',
-    );
-    // Tread bar detail so wheel spinning is unmistakably visible
-    wAsm.boxBottom(0, -wheelSize * 0.52, 0, 0.36, 0.1, 0.14, 0x353a42);
-    wAsm.boxBottom(0, wheelSize * 0.42, 0, 0.36, 0.1, 0.14, 0x353a42);
-    spinGroup.add(wAsm.build(materials));
+    if (!w.isDummy) {
+      const wAsm = new VoxelAssembler();
+      const tireWidth = isBike ? 0.22 : 0.34;
+      wAsm.boxBottom(0, -wheelSize * 0.5, 0, tireWidth, wheelSize, wheelSize, TIRE);
+      wAsm.boxBottom(
+        w.x > 0 ? 0.14 : isBike ? 0 : -0.14,
+        -wheelSize * 0.22,
+        0,
+        0.1,
+        wheelSize * 0.44,
+        wheelSize * 0.44,
+        HUB,
+        'metal',
+      );
+      if (isBike) {
+        // Glowing cyan neon rim stripe on cyberbike
+        wAsm.boxBottom(0, -wheelSize * 0.32, 0, 0.23, wheelSize * 0.64, wheelSize * 0.64, 0x06b6d4, 'emissive');
+      }
+      // Tread bar detail so wheel spinning is unmistakably visible
+      wAsm.boxBottom(0, -wheelSize * 0.52, 0, tireWidth + 0.02, 0.1, 0.14, 0x353a42);
+      wAsm.boxBottom(0, wheelSize * 0.42, 0, tireWidth + 0.02, 0.1, 0.14, 0x353a42);
+      spinGroup.add(wAsm.build(materials));
+    }
     steerPivot.add(spinGroup);
     root.add(steerPivot);
 
@@ -1425,9 +1489,12 @@ export function buildDrivableVehicleRig(
     wheelSpinMeshes.push(spinGroup);
   }
 
-  // Visible seated K-04 driver inside the cab (toggled visible when player enters car!)
+  // Visible seated K-04 driver inside the cab or on bike saddle (toggled visible when player enters car/bike!)
   const driverSeat = new THREE.Group();
-  driverSeat.position.set(-0.26, driverY, driverZ);
+  driverSeat.position.set(isBike ? 0 : -0.26, driverY, driverZ);
+  if (isBike) {
+    driverSeat.rotation.x = 0.35; // Aerodynamic forward racing lean over motorcycle tank
+  }
   const dAsm = new VoxelAssembler();
   dAsm.boxBottom(0, 0, 0, 0.42, 0.36, 0.3, 0xe87a2e);
   dAsm.boxBottom(0, 0.36, 0, 0.46, 0.38, 0.42, 0xede8dc);
@@ -1454,7 +1521,8 @@ export function buildDrivableVehicleRig(
   });
   const jetGeo = new THREE.BoxGeometry(0.18, 0.18, 0.95);
   const coreGeo = new THREE.BoxGeometry(0.1, 0.1, 0.55);
-  for (const ex of [-0.42, 0.42]) {
+  const exhaustXs = isBike ? [0.24] : [-0.42, 0.42];
+  for (const ex of exhaustXs) {
     const jet = new THREE.Mesh(jetGeo, flameMat);
     jet.position.set(ex, 0.38, exhaustZ - 0.45);
     const core = new THREE.Mesh(coreGeo, flameCoreMat);
@@ -2151,6 +2219,163 @@ export function buildDestructiblePropMesh(
     vb.boxBottom(0, 2.05, 0, 2.15, 0.08, 1.45, 0xffffff); // White fringe
   }
 
+  group.add(vb.build(materials));
+  return group;
+}
+
+export interface BirdRig {
+  root: THREE.Group;
+  leftWing: THREE.Group;
+  rightWing: THREE.Group;
+  kind: 'pigeon' | 'crow';
+}
+
+export function buildBirdRig(materials: SharedVoxelMaterials, kind: 'pigeon' | 'crow'): BirdRig {
+  const root = new THREE.Group();
+  const bodyGroup = new THREE.Group();
+  root.add(bodyGroup);
+
+  const vb = new VoxelAssembler();
+  const isPigeon = kind === 'pigeon';
+  const BODY = isPigeon ? 0x64748b : 0x18181b;
+  const NECK = isPigeon ? 0x10b981 : 0x0f172a;
+  const BEAK = isPigeon ? 0xf59e0b : 0x3f3f46;
+  const EYE = 0xffffff;
+
+  // Streamlined voxel bird torso
+  vb.boxBottom(0, 0, -0.05, 0.16, 0.16, 0.28, BODY);
+  vb.boxBottom(0, 0.08, 0.08, 0.14, 0.14, 0.16, NECK);
+  // Head & beak
+  vb.boxBottom(0, 0.18, 0.14, 0.12, 0.12, 0.14, BODY);
+  vb.boxBottom(0, 0.2, 0.22, 0.04, 0.04, 0.08, BEAK);
+  vb.boxBottom(-0.065, 0.23, 0.15, 0.02, 0.03, 0.03, EYE);
+  vb.boxBottom(0.065, 0.23, 0.15, 0.02, 0.03, 0.03, EYE);
+  // Tail feathers
+  vb.boxBottom(0, 0.06, -0.22, 0.12, 0.04, 0.18, BODY);
+  bodyGroup.add(vb.build(materials));
+
+  // Articulated wings pivoted at body sides
+  const leftWing = new THREE.Group();
+  leftWing.position.set(-0.08, 0.1, 0.02);
+  const lwAsm = new VoxelAssembler();
+  lwAsm.boxBottom(-0.16, -0.02, -0.02, 0.32, 0.03, 0.2, BODY);
+  lwAsm.boxBottom(-0.36, -0.01, -0.01, 0.16, 0.02, 0.16, isPigeon ? 0x94a3b8 : 0x27272a);
+  leftWing.add(lwAsm.build(materials));
+  root.add(leftWing);
+
+  const rightWing = new THREE.Group();
+  rightWing.position.set(0.08, 0.1, 0.02);
+  const rwAsm = new VoxelAssembler();
+  rwAsm.boxBottom(0.16, -0.02, -0.02, 0.32, 0.03, 0.2, BODY);
+  rwAsm.boxBottom(0.36, -0.01, -0.01, 0.16, 0.02, 0.16, isPigeon ? 0x94a3b8 : 0x27272a);
+  rightWing.add(rwAsm.build(materials));
+  root.add(rightWing);
+
+  return { root, leftWing, rightWing, kind };
+}
+
+export interface SmallAnimalRig {
+  root: THREE.Group;
+  head: THREE.Group;
+  tail: THREE.Group;
+  legs: THREE.Group[];
+  kind: 'cat' | 'fox';
+}
+
+export function buildSmallAnimalRig(materials: SharedVoxelMaterials, kind: 'cat' | 'fox'): SmallAnimalRig {
+  const root = new THREE.Group();
+  const bodyGroup = new THREE.Group();
+  root.add(bodyGroup);
+
+  const vb = new VoxelAssembler();
+  const isFox = kind === 'fox';
+  const FUR = isFox ? 0xd97706 : 0xf8fafc;
+  const FUR_ALT = isFox ? 0xffedd5 : 0xea580c;
+  const DARK = isFox ? 0x18181b : 0x27272a;
+
+  // Voxel torso
+  vb.boxBottom(0, 0.14, 0, 0.24, 0.22, 0.44, FUR);
+  vb.boxBottom(0, 0.14, 0.02, 0.22, 0.18, 0.28, FUR_ALT);
+  if (!isFox) {
+    // Calico markings
+    vb.boxBottom(-0.06, 0.26, -0.08, 0.12, 0.11, 0.14, DARK);
+    vb.boxBottom(0.07, 0.25, 0.08, 0.11, 0.11, 0.14, FUR_ALT);
+  }
+  bodyGroup.add(vb.build(materials));
+
+  // Articulated Head with ears
+  const head = new THREE.Group();
+  head.position.set(0, 0.26, 0.24);
+  const hAsm = new VoxelAssembler();
+  hAsm.boxBottom(0, 0, 0, 0.22, 0.2, 0.22, FUR);
+  // Snout
+  hAsm.boxBottom(0, 0.02, 0.12, 0.12, 0.1, 0.12, isFox ? 0xffedd5 : 0xf1f5f9);
+  hAsm.boxBottom(0, 0.09, 0.18, 0.04, 0.04, 0.02, 0x18181b); // Nose
+  // Pointed ears
+  hAsm.boxBottom(-0.08, 0.2, -0.02, 0.07, 0.1, 0.06, isFox ? 0x18181b : FUR);
+  hAsm.boxBottom(0.08, 0.2, -0.02, 0.07, 0.1, 0.06, isFox ? 0x18181b : FUR_ALT);
+  // Eyes
+  hAsm.boxBottom(-0.08, 0.1, 0.1, 0.03, 0.04, 0.03, isFox ? 0x18181b : 0x10b981, 'emissive');
+  hAsm.boxBottom(0.08, 0.1, 0.1, 0.03, 0.04, 0.03, isFox ? 0x18181b : 0x10b981, 'emissive');
+  head.add(hAsm.build(materials));
+  root.add(head);
+
+  // Articulated Tail
+  const tail = new THREE.Group();
+  tail.position.set(0, 0.28, -0.22);
+  const tAsm = new VoxelAssembler();
+  if (isFox) {
+    // Big fluffy bushy fox tail with white tip
+    tAsm.boxBottom(0, -0.06, -0.2, 0.15, 0.15, 0.36, 0xd97706);
+    tAsm.boxBottom(0, -0.04, -0.38, 0.13, 0.13, 0.16, 0xffffff);
+  } else {
+    // Sleek cat tail
+    tAsm.boxBottom(0, 0.04, -0.16, 0.06, 0.06, 0.32, DARK);
+  }
+  tail.add(tAsm.build(materials));
+  root.add(tail);
+
+  // 4 Articulated legs for walking
+  const legs: THREE.Group[] = [];
+  const legOffsets = [
+    { x: -0.09, z: 0.15 },
+    { x: 0.09, z: 0.15 },
+    { x: -0.09, z: -0.15 },
+    { x: 0.09, z: -0.15 },
+  ];
+  for (const pos of legOffsets) {
+    const leg = new THREE.Group();
+    leg.position.set(pos.x, 0.14, pos.z);
+    const lAsm = new VoxelAssembler();
+    lAsm.boxBottom(0, -0.14, 0, 0.07, 0.14, 0.07, isFox ? DARK : FUR);
+    leg.add(lAsm.build(materials));
+    root.add(leg);
+    legs.push(leg);
+  }
+
+  return { root, head, tail, legs, kind };
+}
+
+export function buildVoxelPickupMesh(kind: 'heal' | 'overdrive', materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  if (kind === 'heal') {
+    // Voxel First-Aid Nanite Medkit
+    vb.boxBottom(0, -0.2, 0, 0.44, 0.4, 0.24, 0xf1f5f9);
+    vb.boxBottom(0, 0.2, 0, 0.2, 0.08, 0.06, 0x334155, 'metal'); // Handle
+    // Green luminous cross on front and back
+    vb.boxBottom(0, -0.16, 0.125, 0.12, 0.32, 0.02, 0x22c55e, 'emissive');
+    vb.boxBottom(0, -0.06, 0.125, 0.32, 0.12, 0.02, 0x22c55e, 'emissive');
+    vb.boxBottom(0, -0.16, -0.125, 0.12, 0.32, 0.02, 0x22c55e, 'emissive');
+    vb.boxBottom(0, -0.06, -0.125, 0.32, 0.12, 0.02, 0x22c55e, 'emissive');
+  } else {
+    // Voxel Plasma Overdrive Core
+    vb.boxBottom(0, -0.22, 0, 0.34, 0.44, 0.34, 0x1e293b, 'metal');
+    // Glowing amber energizer bands
+    vb.boxBottom(0, -0.15, 0, 0.38, 0.12, 0.38, 0xf59e0b, 'emissive');
+    vb.boxBottom(0, 0.04, 0, 0.38, 0.12, 0.38, 0xf59e0b, 'emissive');
+    vb.boxBottom(0, 0.22, 0, 0.16, 0.06, 0.16, 0x38bdf8, 'emissive');
+  }
   group.add(vb.build(materials));
   return group;
 }

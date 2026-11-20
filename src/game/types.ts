@@ -8,7 +8,9 @@ export type WeaponId = 'pulse' | 'scatter' | 'rail' | 'rpg' | 'katana';
 
 export type WorldZoneId = 'kuroba' | 'aurora' | 'fungi' | 'snowpeak';
 
-export type VehicleKind = 'kei_truck' | 'olive_jeep' | 'aurora_coupe' | 'fungi_buggy' | 'snow_patrol';
+export type VehicleKind = 'kei_truck' | 'olive_jeep' | 'aurora_coupe' | 'fungi_buggy' | 'snow_patrol' | 'bike';
+
+export type WildlifeKind = 'pigeon' | 'crow' | 'cat' | 'fox';
 
 export interface LoadoutConfig {
   // Character (7 categories, 68 options)
