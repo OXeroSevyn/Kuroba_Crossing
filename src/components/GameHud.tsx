@@ -160,8 +160,22 @@ export const GameHud: React.FC<GameHudProps> = ({
       </div>
       )}
 
-      {/* Vehicle Interaction Prompt or Active Driving Hint */}
-      {!hud.inVehicle && hud.nearbyVehicleName && (
+      {/* Vehicle / Helicopter Interaction Prompt or Active Driving Hint */}
+      {!hud.inVehicle && !hud.inHelicopter && hud.nearbyHelicopterName && (
+        <div
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#0b1320]/95 border-2 border-[#38bdf8] shadow-[0_0_20px_rgba(56,189,248,0.5)] flex items-center gap-2.5 animate-pulse"
+          data-testid="helicopter-prompt"
+        >
+          <span className="px-2 py-0.5 rounded bg-[#0284c7] text-[#f0f9ff] font-display font-bold text-xs">
+            E
+          </span>
+          <span className="text-xs sm:text-sm font-display font-bold uppercase tracking-[0.14em] text-[#e0f2fe]">
+            PILOT {hud.nearbyHelicopterName}
+          </span>
+        </div>
+      )}
+
+      {!hud.inVehicle && !hud.inHelicopter && !hud.nearbyHelicopterName && hud.nearbyVehicleName && (
         <div
           className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#18141c]/94 border-2 border-[#ffd47a] shadow-[0_6px_18px_rgba(0,0,0,0.6)] flex items-center gap-2.5"
           data-testid="vehicle-prompt"
@@ -175,7 +189,13 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {hud.inVehicle && (
+      {hud.inHelicopter && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded bg-[#0b1320]/90 border border-[#38bdf8]/50 text-[11px] font-display uppercase tracking-[0.12em] text-[#e0f2fe]">
+          SPACE LIFT · SHIFT/C DESCEND · W/S PITCH · A/D ROLL &amp; YAW · L-CLICK MINIGUN · F/R-CLICK BOMB · [E] EXIT
+        </div>
+      )}
+
+      {hud.inVehicle && !hud.inHelicopter && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded bg-[#14131a]/88 border border-[#45f2ff]/40 text-[11px] font-display uppercase tracking-[0.12em] text-[#e6f7ff]">
           W/S GAS &amp; REVERSE · A/D STEER · SHIFT NITRO · SPACE DRIFT · [E] EXIT VEHICLE
         </div>
@@ -613,9 +633,71 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       </div>
 
-      {/* BOTTOM-RIGHT CLUSTER: Vehicle Speedometer (Driving) OR Weapon Readout (On Foot) */}
+      {/* BOTTOM-RIGHT CLUSTER: Helicopter Avionics (Flying), Vehicle Speedometer (Driving) OR Weapon Readout (On Foot) */}
       <div className="fixed bottom-4 right-4 sm:bottom-5 sm:right-5 flex flex-col items-end gap-2">
-        {hud.inVehicle ? (
+        {hud.inHelicopter ? (
+          <div
+            className="bg-[#0b1320]/95 border-2 border-[#38bdf8]/80 rounded px-4 py-3 min-w-[280px] shadow-[0_8px_24px_rgba(2,132,199,0.45)]"
+            data-testid="helicopter-hud"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-[#38bdf8]">
+                  AIR COMBAT · [E] EXIT
+                </div>
+                <div className="text-sm font-display font-bold uppercase tracking-wider text-[#f0f9ff]">
+                  {hud.helicopterName || 'AH-6X VOXEL GUNSHIP'}
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-display font-bold tabular-nums leading-none text-[#38bdf8]">
+                  {hud.helicopterAltitude.toFixed(1)}
+                </span>
+                <span className="text-[11px] font-display font-bold text-[#93c5fd] ml-1">ALT M</span>
+              </div>
+            </div>
+
+            <div className="mt-2.5">
+              <div className="flex justify-between text-[10px] font-display uppercase tracking-[0.18em] mb-1">
+                <span className="text-[#93c5fd]">ARMOR INTEGRITY</span>
+                <span className="tabular-nums text-[#f0f9ff]">
+                  {hud.helicopterHp}/{hud.helicopterMaxHp}
+                </span>
+              </div>
+              <div className="h-2 bg-[#08101a] border border-[#1e3a5f] rounded-xs overflow-hidden">
+                <div
+                  className="h-full transition-[width] duration-75"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (hud.helicopterHp / Math.max(1, hud.helicopterMaxHp)) * 100))}%`,
+                    backgroundColor:
+                      hud.helicopterHp / Math.max(1, hud.helicopterMaxHp) > 0.5
+                        ? '#38bdf8'
+                        : hud.helicopterHp / Math.max(1, hud.helicopterMaxHp) > 0.25
+                          ? '#f59e0b'
+                          : '#ef4444',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-2.5 grid grid-cols-2 gap-2 text-[10px] font-display">
+              <div className="bg-[#031526]/80 p-1.5 rounded border border-[#1e3a8a]">
+                <div className="text-[#60a5fa] font-bold">20MM MINIGUN</div>
+                <div className="text-[#e0f2fe] text-[11px]">[L-CLICK] FIRE</div>
+              </div>
+              <div className="bg-[#031526]/80 p-1.5 rounded border border-[#1e3a8a]">
+                <div className="text-[#f59e0b] font-bold">AERO BOMBS</div>
+                <div className="text-[#fef3c7] text-[11px] font-bold tabular-nums">
+                  {hud.helicopterBombs}/6 · [F/R-CLICK]
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2 text-[9px] font-display text-[#94a3b8] text-center tracking-wider">
+              [SPACE] ASCEND · [SHIFT/C] DESCEND · [WASD] PITCH/ROLL
+            </div>
+          </div>
+        ) : hud.inVehicle ? (
           <div
             className="bg-[#18141c]/94 border-2 border-[#45f2ff]/65 rounded px-4 py-3 min-w-[260px] shadow-[0_6px_18px_rgba(0,0,0,0.55)]"
             data-testid="vehicle-hud"
@@ -678,6 +760,20 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
         ) : (
           <>
+            {/* Tactical Grenades Slot */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-[#1c1410]/90 border border-[#e6be74]/50 shadow-md">
+              <span className="text-[10px] font-display font-bold text-[#f59e0b] tracking-wider uppercase">[G] THROW</span>
+              <span className={`text-xs font-display font-bold uppercase ${hud.grenades.active === 'frag' ? 'text-[#ef4444]' : 'text-[#38bdf8]'}`}>
+                {hud.grenades.active === 'frag' ? '💥 FRAG' : '💨 SMOKE'}:
+              </span>
+              <span className="text-sm font-display font-bold tabular-nums text-white">
+                {hud.grenades[hud.grenades.active]}
+              </span>
+              <span className="text-[9px] font-display font-bold text-[#9ca3af] tracking-wider uppercase ml-1">
+                [H] SWITCH
+              </span>
+            </div>
+
             {/* Compact 3-weapon switcher row */}
             <div className="flex items-center gap-1.5">
               {WEAPON_ORDER.map((id) => {

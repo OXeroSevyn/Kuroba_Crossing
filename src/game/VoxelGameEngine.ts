@@ -13,9 +13,15 @@ import {
   type LoadoutCombatModifiers,
 } from './customization';
 import {
+  buildAeroBombMesh,
+  buildDrivableHelicopterRig,
   buildDrivableVehicleRig,
   buildEnemyRig,
+  buildFragGrenadeMesh,
   buildHeroRig,
+  buildShockwaveRingMesh,
+  buildSmokeGrenadeMesh,
+  type DrivableHelicopterRig,
   type DrivableVehicleRig,
   type EnemyMeshBundle,
   type HeroRig,
@@ -57,6 +63,8 @@ import type {
   EnemyArchetype,
   GameMode,
   GamePhase,
+  GrenadeType,
+  HelicopterState,
   HudSnapshot,
   LoadoutConfig,
   PlayerKinematicsState,
@@ -151,6 +159,72 @@ interface ActiveVehicle {
   damageSmokeAccum: number;
 }
 
+interface ActiveHelicopter {
+  state: HelicopterState;
+  rig: DrivableHelicopterRig;
+  damageSmokeAccum: number;
+}
+
+interface ActiveGrenadeEntity {
+  id: string;
+  type: GrenadeType;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  rotX: number;
+  rotY: number;
+  vRotX: number;
+  vRotY: number;
+  mesh: THREE.Group;
+  fuseRemaining: number;
+  bounces: number;
+  detonated: boolean;
+  smokeTimer?: number;
+}
+
+interface ActiveBombEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  mesh: THREE.Group;
+  detonated: boolean;
+}
+
+interface KineticShellCasing {
+  active: boolean;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  rotX: number;
+  rotY: number;
+  vRotX: number;
+  vRotY: number;
+  life: number;
+  bounces: number;
+  mesh: THREE.Mesh;
+}
+
+interface ShockwaveRingEntity {
+  mesh: THREE.Mesh;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  maxRadius: number;
+  life: number;
+  maxLife: number;
+}
+
 interface ExplosionEffect {
   active: boolean;
   age: number;
@@ -172,6 +246,8 @@ interface RemotePlayerEntity {
   walkPhase: number;
   drivenVehicle?: ActiveVehicle | null;
   fallbackVehicleRig?: DrivableVehicleRig | null;
+  drivenHelicopter?: ActiveHelicopter | null;
+  fallbackHelicopterRig?: DrivableHelicopterRig | null;
 }
 
 interface VoxelParticle {
@@ -287,6 +363,22 @@ export class VoxelGameEngine {
   private activeVehicle: ActiveVehicle | null = null;
   private nearbyVehicle: ActiveVehicle | null = null;
   private vehicleEnterJustPressed = false;
+
+  // Attack Helicopters
+  private helicopters: ActiveHelicopter[] = [];
+  private activeHelicopter: ActiveHelicopter | null = null;
+  private nearbyHelicopter: ActiveHelicopter | null = null;
+  private bombs: ActiveBombEntity[] = [];
+
+  // Tactical Grenades
+  private grenades: ActiveGrenadeEntity[] = [];
+  private playerGrenades = { frag: 3, smoke: 2, active: 'frag' as GrenadeType };
+  private grenadeJustPressed = false;
+  private grenadeSwitchJustPressed = false;
+
+  // Kinetic Shell Casings & Shockwaves
+  private shellCasings: KineticShellCasing[] = [];
+  private shockwaves: { mesh: THREE.Mesh; life: number; maxLife: number; maxScale: number }[] = [];
   private enemies: ActiveEnemy[] = [];
   private projectiles: ActiveProjectile[] = [];
   private pickups: ActivePickup[] = [];
@@ -534,6 +626,7 @@ export class VoxelGameEngine {
 
     // Spawn all live drivable open-world vehicles across all 4 regions
     this.initVehicles();
+    this.initHelicopters();
 
     // Pre-allocate pooled voxel particles, blood splatters, explosions, projectiles & pickups
     this.initParticlePool();
@@ -677,6 +770,10 @@ export class VoxelGameEngine {
       const v = this.vehicles[i];
       v.rig.headlightCones.visible = isNight && !v.state.destroyed;
     }
+    for (let i = 0; i < this.helicopters.length; i++) {
+      const h = this.helicopters[i];
+      h.rig.searchlightCone.visible = isNight && !h.state.destroyed;
+    }
 
     // Sync volumetric light cones & mist opacities immediately
     for (let i = 0; i < this.world.volumetricLights.length; i++) {
@@ -753,6 +850,98 @@ export class VoxelGameEngine {
     }
   }
 
+  private initHelicopters(): void {
+    this.helicopters = [];
+    const rig = buildDrivableHelicopterRig(this.materials);
+    rig.root.position.set(-18.0, 0.22, 26.0);
+    rig.root.rotation.set(0, 0, 0);
+    rig.driverSeat.visible = false;
+    rig.searchlightCone.visible = this.timeOfDay === 'night';
+    this.scene.add(rig.root);
+
+    const state: HelicopterState = {
+      id: 'kuroba-gunship',
+      name: 'AH-6X VOXEL GUNSHIP',
+      x: -18.0,
+      y: 0.22,
+      z: 26.0,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      speed: 0,
+      altitude: 0,
+      rotorSpeed: 0,
+      rotorAngle: 0,
+      tailRotorAngle: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      hp: 250,
+      maxHp: 250,
+      destroyed: false,
+      bombs: 6,
+      maxBombs: 6,
+      bombCooldown: 0,
+      minigunCooldown: 0,
+      respawnTimer: 0,
+    };
+
+    this.helicopters.push({
+      state,
+      rig,
+      damageSmokeAccum: 0,
+    });
+  }
+
+  private resetHelicopters(): void {
+    if (this.activeHelicopter) {
+      this.activeHelicopter.rig.driverSeat.visible = false;
+      this.activeHelicopter = null;
+    }
+    this.nearbyHelicopter = null;
+    for (const h of this.helicopters) {
+      h.state.x = -18.0;
+      h.state.y = 0.22;
+      h.state.z = 26.0;
+      h.state.yaw = 0;
+      h.state.pitch = 0;
+      h.state.roll = 0;
+      h.state.speed = 0;
+      h.state.altitude = 0;
+      h.state.rotorSpeed = 0;
+      h.state.rotorAngle = 0;
+      h.state.tailRotorAngle = 0;
+      h.state.respawnTimer = 0;
+      h.state.vx = 0;
+      h.state.vy = 0;
+      h.state.vz = 0;
+      h.state.hp = h.state.maxHp;
+      h.state.destroyed = false;
+      h.state.bombs = 6;
+      h.state.bombCooldown = 0;
+      h.state.minigunCooldown = 0;
+      h.rig.root.position.set(-18.0, 0.22, 26.0);
+      h.rig.root.rotation.set(0, 0, 0);
+      h.rig.driverSeat.visible = false;
+      h.rig.wreckOverlay.visible = false;
+      h.rig.fuselageGroup.visible = true;
+      h.rig.searchlightCone.visible = this.timeOfDay === 'night';
+    }
+    for (const g of this.grenades) {
+      this.scene.remove(g.mesh);
+    }
+    this.grenades = [];
+    for (const b of this.bombs) {
+      this.scene.remove(b.mesh);
+    }
+    this.bombs = [];
+    for (const sw of this.shockwaves) {
+      this.scene.remove(sw.mesh);
+    }
+    this.shockwaves = [];
+    this.playerGrenades = { frag: 3, smoke: 2, active: 'frag' };
+  }
+
   private resetVehicles(): void {
     if (this.activeVehicle) {
       this.activeVehicle.rig.driverSeat.visible = false;
@@ -760,6 +949,7 @@ export class VoxelGameEngine {
       this.activeVehicle = null;
     }
     this.nearbyVehicle = null;
+    this.resetHelicopters();
     this.vehicleEnterJustPressed = false;
     this.hero.root.visible = true;
 
@@ -1310,9 +1500,24 @@ export class VoxelGameEngine {
       } else if (code === 'KeyR') {
         this.reloadJustPressed = true;
       } else if (code === 'KeyE') {
-        if (this.activeVehicle || this.nearbyVehicle) {
+        if (this.activeVehicle || this.nearbyVehicle || this.activeHelicopter || this.nearbyHelicopter) {
           e.preventDefault();
           this.vehicleEnterJustPressed = true;
+        }
+      } else if (code === 'KeyG') {
+        if (!this.activeVehicle && !this.activeHelicopter) {
+          e.preventDefault();
+          this.grenadeJustPressed = true;
+        }
+      } else if (code === 'KeyH') {
+        if (!this.activeVehicle && !this.activeHelicopter) {
+          e.preventDefault();
+          this.grenadeSwitchJustPressed = true;
+        }
+      } else if (code === 'KeyF') {
+        if (this.activeHelicopter) {
+          e.preventDefault();
+          this.dropHelicopterBomb();
         }
       } else if (code === 'Digit1') {
         this.pendingWeaponSwitch = 'pulse';
@@ -1769,6 +1974,12 @@ export class VoxelGameEngine {
         this.damagePlayer(data.damage, 0, 0);
       }
     };
+    multiplayer.callbacks.onRemoteGrenade = (data) => {
+      this.throwGrenade(data.kind, data.velocity, data.origin);
+    };
+    multiplayer.callbacks.onRemoteBomb = (data) => {
+      this.dropHelicopterBomb(data.origin, data.velocity);
+    };
   }
 
   private createBadgeSprite(name: string, team: PlayerTeam): THREE.Sprite {
@@ -1868,6 +2079,12 @@ export class VoxelGameEngine {
       if (entry.fallbackVehicleRig) {
         this.scene.remove(entry.fallbackVehicleRig.root);
       }
+      if (entry.drivenHelicopter) {
+        entry.drivenHelicopter.rig.driverSeat.visible = false;
+      }
+      if (entry.fallbackHelicopterRig) {
+        this.scene.remove(entry.fallbackHelicopterRig.root);
+      }
       this.scene.remove(entry.rig.root);
       this.remotePlayers.delete(playerId);
     }
@@ -1946,12 +2163,75 @@ export class VoxelGameEngine {
       rp.rig.root.rotation.y = dampAngle(rp.rig.root.rotation.y, rp.targetYaw, 14, dt);
       rp.rig.rightArm.rotation.x = clamp((rp.state.pitch ?? 0) * 0.55 - 0.1, -0.35, 0.45);
 
-      const isDriving = !!rp.state.inVehicle;
-      rp.rig.bodyPivot.visible = !isDriving;
-      rp.rig.contactShadow.visible = !isDriving;
-      rp.badge.position.set(0, isDriving ? 2.7 : 2.15, 0);
+      const isFlying = !!rp.state.inHelicopter;
+      const isDriving = !isFlying && !!rp.state.inVehicle;
+      rp.rig.bodyPivot.visible = !isDriving && !isFlying;
+      rp.rig.contactShadow.visible = !isDriving && !isFlying;
+      rp.badge.position.set(0, isFlying ? 3.4 : isDriving ? 2.7 : 2.15, 0);
 
-      if (isDriving) {
+      if (isFlying) {
+        if (rp.drivenVehicle) {
+          rp.drivenVehicle.rig.driverSeat.visible = false;
+          rp.drivenVehicle.rig.nitroFlame.visible = false;
+          rp.drivenVehicle = null;
+        }
+        if (rp.fallbackVehicleRig) {
+          rp.fallbackVehicleRig.root.visible = false;
+        }
+
+        let heli = rp.drivenHelicopter;
+        if (!heli) {
+          heli = this.helicopters[0] || null;
+          rp.drivenHelicopter = heli;
+        }
+
+        let targetHeliRig: DrivableHelicopterRig | null = null;
+        if (heli) {
+          if (rp.fallbackHelicopterRig) rp.fallbackHelicopterRig.root.visible = false;
+          targetHeliRig = heli.rig;
+          heli.state.x = rp.rig.root.position.x;
+          heli.state.y = rp.rig.root.position.y;
+          heli.state.z = rp.rig.root.position.z;
+          heli.state.yaw = rp.targetYaw;
+          heli.state.pitch = rp.state.helicopterPitch ?? 0;
+          heli.state.roll = rp.state.helicopterRoll ?? 0;
+          heli.state.rotorSpeed = rp.state.helicopterRotorSpeed ?? 32;
+        } else {
+          if (!rp.fallbackHelicopterRig) {
+            rp.fallbackHelicopterRig = buildDrivableHelicopterRig(this.materials);
+            this.scene.add(rp.fallbackHelicopterRig.root);
+          }
+          targetHeliRig = rp.fallbackHelicopterRig;
+          targetHeliRig.root.visible = true;
+        }
+
+        if (targetHeliRig) {
+          targetHeliRig.root.position.set(
+            rp.rig.root.position.x,
+            rp.rig.root.position.y,
+            rp.rig.root.position.z,
+          );
+          targetHeliRig.root.rotation.set(
+            rp.state.helicopterPitch ?? 0,
+            rp.targetYaw,
+            rp.state.helicopterRoll ?? 0,
+          );
+          targetHeliRig.driverSeat.visible = true;
+          const rSpd = rp.state.helicopterRotorSpeed ?? 32;
+          targetHeliRig.mainRotor.rotation.y += rSpd * dt;
+          targetHeliRig.tailRotor.rotation.x += rSpd * 1.6 * dt;
+          targetHeliRig.searchlightCone.visible = this.timeOfDay === 'night';
+        }
+      } else {
+        if (rp.drivenHelicopter) {
+          rp.drivenHelicopter.rig.driverSeat.visible = false;
+          rp.drivenHelicopter = null;
+        }
+        if (rp.fallbackHelicopterRig) {
+          rp.fallbackHelicopterRig.root.visible = false;
+        }
+
+        if (isDriving) {
         // Resolve vehicle
         const vehId = rp.state.vehicleId;
         let veh = rp.drivenVehicle;
@@ -2033,6 +2313,7 @@ export class VoxelGameEngine {
         }
       }
     }
+  }
   }
 
   private respawnPlayerInTdm(): void {
@@ -2388,6 +2669,79 @@ export class VoxelGameEngine {
   }
 
   private tryToggleVehicle(): void {
+    if (this.activeHelicopter) {
+      // Exit helicopter safely to the side
+      const h = this.activeHelicopter;
+      const exitX = h.state.x - Math.cos(h.state.yaw) * 3.2;
+      const exitZ = h.state.z + Math.sin(h.state.yaw) * 3.2;
+      const resolved = resolveCylinderWorldCollision(
+        exitX,
+        Math.max(0.1, h.state.y),
+        exitZ,
+        PLAYER_RADIUS,
+        PLAYER_HEIGHT,
+        this.world.colliders,
+      );
+      this.player.x = resolved.x;
+      this.player.y = resolved.groundY;
+      this.player.z = resolved.z;
+      this.player.vx = 0;
+      this.player.vy = 0;
+      this.player.vz = 0;
+      this.player.facingYaw = h.state.yaw;
+
+      h.rig.driverSeat.visible = false;
+      this.activeHelicopter = null;
+      this.hero.root.visible = true;
+      this.applyTimeOfDay();
+      gameAudio.playPickup();
+      this.forceHudEmit = true;
+
+      multiplayer.sendLocalState({
+        inHelicopter: false,
+        x: this.player.x,
+        y: this.player.y,
+        z: this.player.z,
+        yaw: this.player.facingYaw,
+      });
+      return;
+    }
+
+    if (this.nearbyHelicopter && !this.nearbyHelicopter.state.destroyed) {
+      const h = this.nearbyHelicopter;
+      let drivenByOther = false;
+      for (const [_, rp] of this.remotePlayers) {
+        if (rp.state.inHelicopter && (rp.drivenHelicopter === h)) {
+          drivenByOther = true;
+          break;
+        }
+      }
+      if (drivenByOther) return;
+
+      this.activeHelicopter = h;
+      this.nearbyHelicopter = null;
+      this.hero.root.visible = false;
+      this.hero.muzzleFlash.visible = false;
+      h.rig.driverSeat.visible = true;
+      this.camYaw = normalizeAngle(h.state.yaw + Math.PI);
+      this.camPitch = 0.28;
+      this.applyTimeOfDay();
+      gameAudio.playDash();
+      this.forceHudEmit = true;
+
+      multiplayer.sendLocalState({
+        inHelicopter: true,
+        helicopterPitch: h.state.pitch,
+        helicopterRoll: h.state.roll,
+        helicopterRotorSpeed: h.state.rotorSpeed,
+        x: h.state.x,
+        y: h.state.y,
+        z: h.state.z,
+        yaw: h.state.yaw,
+      });
+      return;
+    }
+
     if (this.activeVehicle) {
       // Exit vehicle safely to the left driver side
       const v = this.activeVehicle;
@@ -2513,8 +2867,9 @@ export class VoxelGameEngine {
     v.rig.nitroFlame.visible = false;
     v.rig.headlightCones.visible = false;
 
-    // Safely eject player if driving the exploding vehicle!
+    // Heavy player damage & high launch if driving the exploding vehicle!
     if (this.activeVehicle === v) {
+      this.damagePlayer(90, 0, 0);
       const exitX = v.state.x - Math.cos(v.state.yaw) * 3.1;
       const exitZ = v.state.z + Math.sin(v.state.yaw) * 3.1;
       const resolved = resolveCylinderWorldCollision(
@@ -2528,7 +2883,7 @@ export class VoxelGameEngine {
       this.player.x = resolved.x;
       this.player.y = resolved.groundY;
       this.player.z = resolved.z;
-      this.player.vy = 5.5;
+      this.player.vy = 7.5;
       this.activeVehicle = null;
       this.hero.root.visible = true;
       this.applyTimeOfDay();
@@ -2538,12 +2893,85 @@ export class VoxelGameEngine {
     this.forceHudEmit = true;
   }
 
+  private damageHelicopter(h: ActiveHelicopter, dmg: number): void {
+    if (h.state.destroyed || dmg <= 0) return;
+    h.state.hp = Math.max(0, h.state.hp - dmg);
+    if (h === this.activeHelicopter) {
+      this.forceHudEmit = true;
+    }
+    if (h.state.hp <= 0) {
+      this.explodeHelicopter(h);
+    }
+  }
+
+  private explodeHelicopter(h: ActiveHelicopter): void {
+    if (h.state.destroyed) return;
+    h.state.destroyed = true;
+    h.state.hp = 0;
+    h.rig.wreckOverlay.visible = true;
+    h.rig.fuselageGroup.visible = false;
+    h.rig.searchlightCone.visible = false;
+
+    if (this.activeHelicopter === h) {
+      this.damagePlayer(95, 0, 0);
+      const exitX = h.state.x - Math.cos(h.state.yaw) * 3.5;
+      const exitZ = h.state.z + Math.sin(h.state.yaw) * 3.5;
+      const resolved = resolveCylinderWorldCollision(
+        exitX,
+        Math.max(0.1, h.state.y),
+        exitZ,
+        PLAYER_RADIUS,
+        PLAYER_HEIGHT,
+        this.world.colliders,
+      );
+      this.player.x = resolved.x;
+      this.player.y = resolved.groundY;
+      this.player.z = resolved.z;
+      this.player.vy = 8.5; // Ejected skyward!
+      this.activeHelicopter = null;
+      this.hero.root.visible = true;
+      this.applyTimeOfDay();
+    }
+
+    this.triggerExplosion(h.state.x, Math.max(1.0, h.state.y), h.state.z, 15.0, 280);
+    this.forceHudEmit = true;
+  }
+
   private detonateBarrel(b: ExplosiveBarrelItem): void {
     if (!b.active) return;
     b.active = false;
     b.respawnTimer = 18;
     b.mesh.visible = false;
     this.triggerExplosion(b.x, b.y + 0.7, b.z, 10.5, 195);
+  }
+
+  private spawnShockwaveRing(x: number, y: number, z: number, maxRadius: number, duration: number): void {
+    const mesh = buildShockwaveRingMesh();
+    mesh.position.set(x, y, z);
+    mesh.scale.set(0.2, 0.2, 1);
+    this.scene.add(mesh);
+    this.shockwaves.push({
+      mesh,
+      life: 0,
+      maxLife: duration,
+      maxScale: maxRadius,
+    });
+  }
+
+  private updateShockwaves(dt: number): void {
+    for (let i = this.shockwaves.length - 1; i >= 0; i--) {
+      const sw = this.shockwaves[i];
+      sw.life += dt;
+      const progress = clamp(sw.life / sw.maxLife, 0, 1);
+      const scale = 0.2 + progress * sw.maxScale;
+      sw.mesh.scale.set(scale, scale, 1);
+      const mat = sw.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = (1 - progress) * 0.82;
+      if (sw.life >= sw.maxLife) {
+        this.scene.remove(sw.mesh);
+        this.shockwaves.splice(i, 1);
+      }
+    }
   }
 
   private triggerExplosion(
@@ -2577,6 +3005,9 @@ export class VoxelGameEngine {
       fx.core.scale.setScalar(1.0);
       fx.core.visible = true;
     }
+
+    // High Quality Volumetric Expanding Shockwave Ring
+    this.spawnShockwaveRing(x, y + 0.1, z, radius * 1.15, 0.48);
 
     // Blazing voxel fireball cubes, flying debris & billowing smoke column!
     this.spawnParticles(
@@ -2638,15 +3069,40 @@ export class VoxelGameEngine {
       }
     }
 
-    // Controlled player shockwave knockback & damage if right beside blast
+    // Chain-reaction damage to helicopters!
+    for (let i = 0; i < this.helicopters.length; i++) {
+      const h = this.helicopters[i];
+      if (h.state.destroyed) continue;
+      const hDist = Math.hypot(h.state.x - x, h.state.z - z);
+      const hDmg = calculateExplosionDamage(hDist, radius, 140);
+      if (hDmg > 0) {
+        this.damageHelicopter(h, hDmg);
+      }
+    }
+
+    // Lethal / Heavy player shockwave knockback & radial damage
     const pDx = this.player.x - x;
     const pDz = this.player.z - z;
     const pDist = Math.hypot(pDx, pDz);
-    const pDmg = calculateExplosionDamage(pDist, radius * 0.72, 24);
+    const pDmg = calculateExplosionDamage(pDist, radius * 0.85, 95);
     if (pDmg > 0) {
       const nx = pDist > 0.01 ? pDx / pDist : 1;
       const nz = pDist > 0.01 ? pDz / pDist : 0;
-      this.damagePlayer(pDmg, nx * 1.4, nz * 1.4);
+      this.damagePlayer(pDmg, nx * 2.5, nz * 2.5);
+      this.player.vy = Math.max(this.player.vy, 4.5 * (1 - pDist / (radius * 0.85)));
+    }
+
+    // Damage remote players in multiplayer
+    if (this.gameMode === 'deathmatch') {
+      for (const [rpId, rp] of this.remotePlayers) {
+        const rDx = rp.rig.root.position.x - x;
+        const rDz = rp.rig.root.position.z - z;
+        const rDist = Math.hypot(rDx, rDz);
+        const rDmg = calculateExplosionDamage(rDist, radius * 0.85, 95);
+        if (rDmg > 0 && multiplayer.isHost) {
+          multiplayer.sendHit(rpId, rDmg, 'rail');
+        }
+      }
     }
   }
 
@@ -2974,6 +3430,421 @@ export class VoxelGameEngine {
     }
   }
 
+  private updateActiveHelicopter(dt: number): void {
+    const h = this.activeHelicopter!;
+    const throttle =
+      (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp') ? 1 : 0) -
+      (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown') ? 1 : 0);
+    const bank =
+      (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight') ? 1 : 0) -
+      (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft') ? 1 : 0);
+    const ascend = this.keysHeld.has('Space');
+    const descend = this.keysHeld.has('ShiftLeft') || this.keysHeld.has('ShiftRight') || this.keysHeld.has('KeyC');
+
+    // Rotor spin acceleration
+    const targetRotorSpeed = 34.0;
+    h.state.rotorSpeed += (targetRotorSpeed - h.state.rotorSpeed) * (1 - Math.exp(-3.5 * dt));
+    h.rig.mainRotor.rotation.y += h.state.rotorSpeed * dt;
+    h.rig.tailRotor.rotation.x += h.state.rotorSpeed * 1.6 * dt;
+
+    // Pitch & Roll flight dynamics
+    const targetPitch = throttle * -0.28;
+    const targetRoll = bank * 0.26;
+    h.state.pitch += (targetPitch - h.state.pitch) * (1 - Math.exp(-6.0 * dt));
+    h.state.roll += (targetRoll - h.state.roll) * (1 - Math.exp(-6.0 * dt));
+
+    // Smooth yaw tracking to camera yaw
+    const targetYaw = normalizeAngle(this.camYaw + Math.PI);
+    h.state.yaw = dampAngle(h.state.yaw, targetYaw, 5.0, dt);
+
+    // Vertical flight physics
+    let targetVy = 0;
+    if (ascend) targetVy = 8.5;
+    else if (descend) targetVy = -7.0;
+    h.state.vy += (targetVy - h.state.vy) * (1 - Math.exp(-5.0 * dt));
+    h.state.y = clamp(h.state.y + h.state.vy * dt, 0.22, 36.0);
+    h.state.altitude = Math.max(0, h.state.y - 0.22);
+
+    // Forward & strafe horizontal flight kinematics
+    const fwdX = Math.sin(h.state.yaw);
+    const fwdZ = Math.cos(h.state.yaw);
+    const rtX = Math.cos(h.state.yaw);
+    const rtZ = -Math.sin(h.state.yaw);
+
+    const fwdSpeed = -h.state.pitch * 55.0; // Up to ~15.4 m/s (55 km/h)
+    const strafeSpeed = h.state.roll * 35.0;
+
+    h.state.vx = fwdX * fwdSpeed + rtX * strafeSpeed;
+    h.state.vz = fwdZ * fwdSpeed + rtZ * strafeSpeed;
+
+    h.state.x = clamp(h.state.x + h.state.vx * dt, -ARENA_HALF_EXTENT + 4, ARENA_HALF_EXTENT - 4);
+    h.state.z = clamp(h.state.z + h.state.vz * dt, -ARENA_HALF_EXTENT + 4, ARENA_HALF_EXTENT - 4);
+
+    // Sync player position with helicopter
+    this.player.x = h.state.x;
+    this.player.y = h.state.y;
+    this.player.z = h.state.z;
+    this.player.facingYaw = h.state.yaw;
+
+    // Apply visual transforms to rig
+    h.rig.root.position.set(h.state.x, h.state.y, h.state.z);
+    h.rig.root.rotation.set(h.state.pitch, h.state.yaw, h.state.roll);
+
+    // Ground rotor wash dust particles when hovering low
+    if (h.state.y < 9.0) {
+      if (Math.random() < 0.45) {
+        this.spawnParticles(
+          h.state.x + (Math.random() - 0.5) * 4.5,
+          0.18,
+          h.state.z + (Math.random() - 0.5) * 4.5,
+          2,
+          [0x556644, 0x887755, 0x99aa88],
+          1.8,
+          4.5,
+          0.09,
+          0.18,
+          3,
+          0.32,
+        );
+      }
+    }
+
+    // Cooldown decrements
+    if (h.state.bombCooldown > 0) h.state.bombCooldown -= dt;
+    if (h.state.minigunCooldown > 0) h.state.minigunCooldown -= dt;
+
+    // Searchlight target at night
+    if (this.timeOfDay === 'night') {
+      this.flashlight.position.set(h.state.x, h.state.y + 0.2, h.state.z);
+      this.flashlightTarget.position.set(h.state.x + fwdX * 24, 0.2, h.state.z + fwdZ * 24);
+    }
+
+    // Rotary 20mm minigun (Left Click)
+    if (this.mouseLeftDown && h.state.minigunCooldown <= 0) {
+      h.state.minigunCooldown = 0.082;
+      h.rig.chinTurret.rotation.z += 22.0 * dt;
+      gameAudio.playShoot('pulse');
+      this.recoilVisual = Math.min(1, this.recoilVisual + 0.04);
+      this.trauma = Math.min(1, this.trauma + 0.02);
+
+      h.rig.chinTurret.getWorldPosition(_muzzlePos);
+      const projSpeed = 75.0;
+      const pitchAim = Math.min(-0.08, h.state.pitch - 0.12);
+      _v1.set(
+        fwdX * Math.cos(pitchAim) + (Math.random() - 0.5) * 0.03,
+        Math.sin(pitchAim) + (Math.random() - 0.5) * 0.03,
+        fwdZ * Math.cos(pitchAim) + (Math.random() - 0.5) * 0.03,
+      ).normalize();
+
+      this.spawnProjectile(
+        true,
+        _muzzlePos.x,
+        _muzzlePos.y,
+        _muzzlePos.z,
+        _v1.x * projSpeed,
+        _v1.y * projSpeed,
+        _v1.z * projSpeed,
+        32,
+        false,
+        0x38bdf8,
+        0.02,
+      );
+
+      this.spawnParticles(
+        _muzzlePos.x,
+        _muzzlePos.y,
+        _muzzlePos.z,
+        4,
+        [0x38bdf8, 0xffffff, 0xffe46b],
+        2.5,
+        5.5,
+        0.06,
+        0.12,
+        4,
+        0.16,
+      );
+      this.spawnShellCasing(_muzzlePos.x, _muzzlePos.y, _muzzlePos.z, 'pulse');
+
+      if (this.gameMode === 'deathmatch') {
+        multiplayer.sendShoot(
+          [_muzzlePos.x, _muzzlePos.y, _muzzlePos.z],
+          [_v1.x, _v1.y, _v1.z],
+          'pulse',
+        );
+      }
+    }
+
+    // Aero bomb drop on Right Click
+    if (this.mouseRightDown && h.state.bombs > 0 && h.state.bombCooldown <= 0) {
+      this.dropHelicopterBomb();
+    }
+
+    // Multiplayer sync
+    multiplayer.sendLocalState({
+      inHelicopter: true,
+      x: h.state.x,
+      y: h.state.y,
+      z: h.state.z,
+      yaw: h.state.yaw,
+      helicopterPitch: h.state.pitch,
+      helicopterRoll: h.state.roll,
+      helicopterRotorSpeed: h.state.rotorSpeed,
+    });
+  }
+
+  private updateHelicopters(dt: number): void {
+    let closest: ActiveHelicopter | null = null;
+    let closestDist = 6.5;
+
+    for (let i = 0; i < this.helicopters.length; i++) {
+      const h = this.helicopters[i];
+      if (h === this.activeHelicopter) continue;
+
+      if (h.state.destroyed) {
+        h.damageSmokeAccum += dt;
+        if (h.damageSmokeAccum > 0.22) {
+          h.damageSmokeAccum = 0;
+          this.spawnSmoke(h.state.x, h.state.y + 0.8, h.state.z, 2, 0.28, 0.5);
+        }
+        continue;
+      }
+
+      // Check if remote player is piloting this helicopter
+      let pilotedByOther = false;
+      for (const [_, rp] of this.remotePlayers) {
+        if (rp.state.inHelicopter && (rp.drivenHelicopter === h)) {
+          pilotedByOther = true;
+          break;
+        }
+      }
+
+      if (!pilotedByOther) {
+        // Slow down rotors when idle
+        if (h.state.rotorSpeed > 0) {
+          h.state.rotorSpeed = Math.max(0, h.state.rotorSpeed - 8.0 * dt);
+          h.rig.mainRotor.rotation.y += h.state.rotorSpeed * dt;
+          h.rig.tailRotor.rotation.x += h.state.rotorSpeed * 1.6 * dt;
+        }
+      }
+
+      if (!this.activeHelicopter && !this.activeVehicle) {
+        const d = Math.hypot(this.player.x - h.state.x, this.player.z - h.state.z);
+        if (d < closestDist && Math.abs(this.player.y - h.state.y) < 3.2) {
+          closestDist = d;
+          closest = h;
+        }
+      }
+    }
+
+    if (closest !== this.nearbyHelicopter) {
+      this.nearbyHelicopter = closest;
+      this.forceHudEmit = true;
+    }
+  }
+
+  private throwGrenade(
+    type: GrenadeType,
+    remoteVel?: [number, number, number],
+    remoteOrigin?: [number, number, number],
+  ): void {
+    if (!remoteVel) {
+      if (this.playerGrenades[type] <= 0) return;
+      this.playerGrenades[type]--;
+      gameAudio.playGrenadePin();
+      this.forceHudEmit = true;
+    }
+
+    const mesh = type === 'frag' ? buildFragGrenadeMesh(this.materials) : buildSmokeGrenadeMesh(this.materials);
+    const startX = remoteOrigin ? remoteOrigin[0] : this.player.x;
+    const startY = remoteOrigin ? remoteOrigin[1] : this.player.y + 1.35;
+    const startZ = remoteOrigin ? remoteOrigin[2] : this.player.z;
+    mesh.position.set(startX, startY, startZ);
+    this.scene.add(mesh);
+
+    let vx = 0;
+    let vy = 0;
+    let vz = 0;
+
+    if (remoteVel) {
+      vx = remoteVel[0];
+      vy = remoteVel[1];
+      vz = remoteVel[2];
+    } else {
+      const fwdX = -Math.sin(this.camYaw);
+      const fwdZ = -Math.cos(this.camYaw);
+      const spd = 16.5;
+      vx = fwdX * spd;
+      vy = Math.sin(Math.max(-0.2, this.camPitch)) * spd + 4.8;
+      vz = fwdZ * spd;
+      multiplayer.sendGrenade([startX, startY, startZ], [vx, vy, vz], type);
+    }
+
+    this.grenades.push({
+      id: `${Date.now()}-${Math.random()}`,
+      type,
+      x: startX,
+      y: startY,
+      z: startZ,
+      vx,
+      vy,
+      vz,
+      rotX: 0,
+      rotY: 0,
+      vRotX: 12 + Math.random() * 8,
+      vRotY: 10 + Math.random() * 6,
+      mesh,
+      fuseRemaining: type === 'frag' ? 2.8 : 1.8,
+      bounces: 0,
+      detonated: false,
+      smokeTimer: type === 'smoke' ? 8.5 : undefined,
+    });
+  }
+
+  private updateGrenades(dt: number): void {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const g = this.grenades[i];
+      if (g.detonated) {
+        if (g.type === 'smoke' && g.smokeTimer !== undefined) {
+          g.smokeTimer -= dt;
+          if (Math.random() < 0.35) {
+            this.spawnSmoke(
+              g.x + (Math.random() - 0.5) * 2.5,
+              g.y + 0.3 + Math.random() * 1.2,
+              g.z + (Math.random() - 0.5) * 2.5,
+              4,
+              0.45,
+              1.2,
+            );
+          }
+          for (let j = 0; j < this.enemies.length; j++) {
+            const e = this.enemies[j];
+            if (e.aiState === 'ko') continue;
+            const dist = Math.hypot(e.x - g.x, e.z - g.z);
+            if (dist < 7.5) {
+              e.attackCooldown = Math.max(e.attackCooldown, 0.6);
+            }
+          }
+          if (g.smokeTimer <= 0) {
+            this.scene.remove(g.mesh);
+            this.grenades.splice(i, 1);
+          }
+        } else {
+          this.scene.remove(g.mesh);
+          this.grenades.splice(i, 1);
+        }
+        continue;
+      }
+
+      g.vy -= 18.0 * dt;
+      g.x += g.vx * dt;
+      g.y += g.vy * dt;
+      g.z += g.vz * dt;
+      g.rotX += g.vRotX * dt;
+      g.rotY += g.vRotY * dt;
+
+      if (g.y <= 0.16) {
+        g.y = 0.16;
+        g.vy = -g.vy * 0.42;
+        g.vx *= 0.68;
+        g.vz *= 0.68;
+        g.bounces++;
+        if (Math.abs(g.vy) > 0.8) {
+          gameAudio.playGrenadeBounce();
+        }
+      }
+
+      g.mesh.position.set(g.x, g.y, g.z);
+      g.mesh.rotation.set(g.rotX, g.rotY, 0);
+
+      g.fuseRemaining -= dt;
+      if (g.fuseRemaining <= 0) {
+        g.detonated = true;
+        if (g.type === 'frag') {
+          this.triggerExplosion(g.x, g.y + 0.3, g.z, 12.0, 240);
+          this.spawnShockwaveRing(g.x, 0.14, g.z, 13.0, 0.45);
+          this.scene.remove(g.mesh);
+          this.grenades.splice(i, 1);
+        } else {
+          gameAudio.playGrenadeBounce();
+          this.spawnSmoke(g.x, g.y + 0.3, g.z, 18, 0.6, 1.4);
+          this.spawnShockwaveRing(g.x, 0.14, g.z, 8.0, 0.65);
+          g.mesh.visible = false;
+        }
+      }
+    }
+  }
+
+  private dropHelicopterBomb(
+    remoteOrigin?: [number, number, number],
+    remoteVel?: [number, number, number],
+  ): void {
+    if (!remoteOrigin) {
+      if (!this.activeHelicopter) return;
+      const h = this.activeHelicopter;
+      if (h.state.bombs <= 0 || h.state.bombCooldown > 0) return;
+      h.state.bombs--;
+      h.state.bombCooldown = 0.85;
+      gameAudio.playBombDrop();
+      this.forceHudEmit = true;
+
+      const origin: [number, number, number] = [h.state.x, h.state.y - 0.4, h.state.z];
+      const vel: [number, number, number] = [h.state.vx * 0.7, -2.5, h.state.vz * 0.7];
+      multiplayer.sendBomb(origin, vel);
+
+      const mesh = buildAeroBombMesh(this.materials);
+      mesh.position.set(origin[0], origin[1], origin[2]);
+      this.scene.add(mesh);
+      this.bombs.push({
+        id: `${Date.now()}-${Math.random()}`,
+        x: origin[0],
+        y: origin[1],
+        z: origin[2],
+        vx: vel[0],
+        vy: vel[1],
+        vz: vel[2],
+        mesh,
+        detonated: false,
+      });
+    } else {
+      gameAudio.playBombDrop();
+      const mesh = buildAeroBombMesh(this.materials);
+      mesh.position.set(remoteOrigin[0], remoteOrigin[1], remoteOrigin[2]);
+      this.scene.add(mesh);
+      this.bombs.push({
+        id: `${Date.now()}-${Math.random()}`,
+        x: remoteOrigin[0],
+        y: remoteOrigin[1],
+        z: remoteOrigin[2],
+        vx: remoteVel ? remoteVel[0] : 0,
+        vy: remoteVel ? remoteVel[1] : -2.5,
+        vz: remoteVel ? remoteVel[2] : 0,
+        mesh,
+        detonated: false,
+      });
+    }
+  }
+
+  private updateBombs(dt: number): void {
+    for (let i = this.bombs.length - 1; i >= 0; i--) {
+      const b = this.bombs[i];
+      b.vy -= 22.0 * dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.z += b.vz * dt;
+
+      b.mesh.position.set(b.x, b.y, b.z);
+      b.mesh.rotation.x = Math.atan2(-b.vy, Math.hypot(b.vx, b.vz));
+
+      if (b.y <= 0.2) {
+        b.detonated = true;
+        this.triggerExplosion(b.x, 0.4, b.z, 16.5, 340);
+        this.spawnShockwaveRing(b.x, 0.15, b.z, 18.0, 0.65);
+        this.scene.remove(b.mesh);
+        this.bombs.splice(i, 1);
+      }
+    }
+  }
+
   private updatePlaying(dt: number): void {
     // Real-time visual timers keep ticking during sim hitstop
     this.trauma = Math.max(0, this.trauma - dt * 2.1);
@@ -3029,11 +3900,21 @@ export class VoxelGameEngine {
 
     // Keyboard camera turn support (Q / E when not near a vehicle and on foot)
     if (this.keysHeld.has('KeyQ')) this.camYaw += 2.1 * dt;
-    if (this.keysHeld.has('KeyE') && !this.activeVehicle && !this.nearbyVehicle) {
+    if (this.keysHeld.has('KeyE') && !this.activeVehicle && !this.nearbyVehicle && !this.activeHelicopter && !this.nearbyHelicopter) {
       this.camYaw -= 2.1 * dt;
     }
 
-    if (this.activeVehicle) {
+    if (this.activeHelicopter) {
+      // Flight mode: 3D flight avionics, minigun, bombs & rotor kinematics
+      this.jumpJustPressed = false;
+      this.dashJustPressed = false;
+      this.reloadJustPressed = false;
+      this.pendingWeaponSwitch = undefined;
+      this.updateActiveHelicopter(dt);
+      this.updateParkedVehicles(dt);
+      this.updateHelicopters(dt);
+      this.updateCameraRig(dt);
+    } else if (this.activeVehicle) {
       // Driving mode: vehicle controls, car-vs-car crashing & zombie roadkill physics
       this.jumpJustPressed = false;
       this.dashJustPressed = false;
@@ -3041,9 +3922,22 @@ export class VoxelGameEngine {
       this.pendingWeaponSwitch = undefined;
       this.updateActiveVehicle(dt);
       this.updateParkedVehicles(dt);
+      this.updateHelicopters(dt);
       this.updateVehicleCollisions();
       this.updateCameraRig(dt);
     } else {
+      // Tactical Grenade switch & throw handling on foot
+      if (this.grenadeSwitchJustPressed) {
+        this.grenadeSwitchJustPressed = false;
+        this.playerGrenades.active = this.playerGrenades.active === 'frag' ? 'smoke' : 'frag';
+        gameAudio.playPickup();
+        this.forceHudEmit = true;
+      }
+      if (this.grenadeJustPressed) {
+        this.grenadeJustPressed = false;
+        this.throwGrenade(this.playerGrenades.active);
+      }
+      this.updateHelicopters(dt);
       // On-foot kinematics, strict wall & parked-car collisions, animations, and tactical shooting
       const forward =
         (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp') ? 1 : 0) -
@@ -3210,8 +4104,11 @@ export class VoxelGameEngine {
       this.updateMultiplayerSync(dt);
     }
 
-    // 6. Projectiles, Pickups, Particles
+    // 6. Projectiles, Ordnance, Pickups, Particles
     this.updateProjectiles(dt);
+    this.updateGrenades(dt);
+    this.updateBombs(dt);
+    this.updateShockwaves(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
 
@@ -3330,29 +4227,34 @@ export class VoxelGameEngine {
   }
 
   private updateCameraRig(dt: number): void {
-    const isDriving = this.activeVehicle !== null;
-    const isAiming = !isDriving && this.mouseRightDown;
-    const isDashing = !isDriving && this.player.dashTimer > 0;
+    const isFlying = this.activeHelicopter !== null;
+    const isDriving = !isFlying && this.activeVehicle !== null;
+    const isAiming = !isDriving && !isFlying && this.mouseRightDown;
+    const isDashing = !isDriving && !isFlying && this.player.dashTimer > 0;
 
     // Dynamic FOV (tightens on ADS zoom, widens smoothly with vehicle speed & nitro!)
     const speedNorm = isDriving
       ? clamp(Math.abs(this.activeVehicle!.state.speed) / 28, 0, 1)
-      : 0;
-    const targetFov = isDriving
-      ? 60 + speedNorm * 10 + (this.activeVehicle!.state.boosting ? 5 : 0)
-      : isAiming
-        ? 44
-        : isDashing
-          ? 64
-          : 56;
+      : isFlying
+        ? clamp(Math.hypot(this.activeHelicopter!.state.vx, this.activeHelicopter!.state.vz) / 18, 0, 1)
+        : 0;
+    const targetFov = isFlying
+      ? 64 + speedNorm * 8
+      : isDriving
+        ? 60 + speedNorm * 10 + (this.activeVehicle!.state.boosting ? 5 : 0)
+        : isAiming
+          ? 44
+          : isDashing
+            ? 64
+            : 56;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
       this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-10 * dt));
       this.camera.updateProjectionMatrix();
     }
 
-    // Over-the-shoulder or elevated vehicle chase pivot
+    // Over-the-shoulder, vehicle chase, or helicopter aerial combat pivot
     const pivotX = this.player.x;
-    const pivotY = this.player.y + (isDriving ? 1.85 : 1.52);
+    const pivotY = this.player.y + (isFlying ? 2.2 : isDriving ? 1.85 : 1.52);
     const pivotZ = this.player.z;
 
     const fwdX = -Math.sin(this.camYaw);
@@ -3360,11 +4262,17 @@ export class VoxelGameEngine {
     const rightX = Math.cos(this.camYaw);
     const rightZ = -Math.sin(this.camYaw);
 
-    const dist = isDriving ? 8.6 + speedNorm * 1.4 : isAiming ? 3.35 : 5.95;
-    const shoulder = isDriving ? 0 : isAiming ? 0.86 : 0.72;
-    const pitch = isDriving ? 0.24 : this.camPitch;
+    const dist = isFlying
+      ? 12.0 + speedNorm * 2.5
+      : isDriving
+        ? 8.6 + speedNorm * 1.4
+        : isAiming
+          ? 3.35
+          : 5.95;
+    const shoulder = isFlying || isDriving ? 0 : isAiming ? 0.86 : 0.72;
+    const pitch = isFlying ? Math.max(0.14, this.camPitch) : isDriving ? 0.24 : this.camPitch;
     const horizDist = Math.cos(pitch) * dist;
-    const vertOffset = Math.sin(pitch) * dist + (isDriving ? 1.35 : 0.45);
+    const vertOffset = Math.sin(pitch) * dist + (isFlying ? 3.0 : isDriving ? 1.35 : 0.45);
 
     _camGoal.set(
       pivotX - fwdX * horizDist + rightX * shoulder,
@@ -3383,20 +4291,20 @@ export class VoxelGameEngine {
       _raycaster.far = desiredDist;
       const hits = _raycaster.intersectObjects(this.world.cameraObstructions, true);
       if (hits.length > 0 && hits[0].distance < desiredDist) {
-        const pullDist = Math.max(isDriving ? 2.4 : 1.35, hits[0].distance - 0.35);
+        const pullDist = Math.max(isFlying ? 3.0 : isDriving ? 2.4 : 1.35, hits[0].distance - 0.35);
         _camGoal.copy(_rayOrigin).addScaledVector(_rayDir, pullDist);
       }
     }
 
     // Exponentially damped camera glide
-    const camLerp = 1 - Math.exp(-(isDriving ? 11 : 16) * dt);
+    const camLerp = 1 - Math.exp(-(isFlying ? 9 : isDriving ? 11 : 16) * dt);
     this.camPos.lerp(_camGoal, camLerp);
 
     // Look target slightly ahead of player/vehicle along camera view ray
     _lookGoal.set(
-      pivotX + fwdX * (isDriving ? 14 : 16) + rightX * (shoulder * 0.55),
-      pivotY - Math.sin(pitch) * (isDriving ? 3.5 : 14) + 0.25,
-      pivotZ + fwdZ * (isDriving ? 14 : 16) + rightZ * (shoulder * 0.55),
+      pivotX + fwdX * (isFlying ? 18 : isDriving ? 14 : 16) + rightX * (shoulder * 0.55),
+      pivotY - Math.sin(pitch) * (isFlying ? 4.5 : isDriving ? 3.5 : 14) + 0.25,
+      pivotZ + fwdZ * (isFlying ? 18 : isDriving ? 14 : 16) + rightZ * (shoulder * 0.55),
     );
     this.camLook.lerp(_lookGoal, 1 - Math.exp(-18 * dt));
 
@@ -4655,7 +5563,7 @@ export class VoxelGameEngine {
       reloadProgress: this.weapon.reloading
         ? clamp(1 - this.weapon.reloadTimer / Math.max(0.01, this.weapon.reloadTotal), 0, 1)
         : 0,
-      aiming: this.mouseRightDown && !this.activeVehicle,
+      aiming: this.mouseRightDown && !this.activeVehicle && !this.activeHelicopter,
       pointerLocked: this.pointerLocked,
       hitmarkerTimer: this.hitmarkerTimer,
       hitmarkerCrit: this.hitmarkerCrit,
@@ -4671,6 +5579,7 @@ export class VoxelGameEngine {
           : ENEMY_STATS.shogun.label
         : '',
       crosshairSpread: this.crosshairSpread,
+      grenades: { ...this.playerGrenades },
       inVehicle: this.activeVehicle !== null,
       vehicleName: this.activeVehicle ? this.activeVehicle.state.name : '',
       vehicleSpeedKmh: this.activeVehicle
@@ -4680,24 +5589,45 @@ export class VoxelGameEngine {
       vehicleHp: this.activeVehicle ? Math.round(this.activeVehicle.state.hp) : 120,
       vehicleMaxHp: this.activeVehicle ? this.activeVehicle.state.maxHp : 120,
       nearbyVehicleName:
-        !this.activeVehicle && this.nearbyVehicle ? this.nearbyVehicle.state.name : null,
+        !this.activeVehicle && !this.activeHelicopter && this.nearbyVehicle
+          ? this.nearbyVehicle.state.name
+          : null,
+      inHelicopter: this.activeHelicopter !== null,
+      helicopterName: this.activeHelicopter ? this.activeHelicopter.state.name : '',
+      helicopterAltitude: this.activeHelicopter ? Math.max(0, this.activeHelicopter.state.y - 0.22) : 0,
+      helicopterBombs: this.activeHelicopter ? this.activeHelicopter.state.bombs : 0,
+      helicopterHp: this.activeHelicopter ? Math.round(this.activeHelicopter.state.hp) : 250,
+      helicopterMaxHp: this.activeHelicopter ? this.activeHelicopter.state.maxHp : 250,
+      nearbyHelicopterName:
+        !this.activeHelicopter && !this.activeVehicle && this.nearbyHelicopter
+          ? this.nearbyHelicopter.state.name
+          : null,
       minimapPlayer: {
         x: this.player.x,
         z: this.player.z,
-        yaw: this.activeVehicle
-          ? normalizeAngle(this.activeVehicle.state.yaw + Math.PI)
-          : this.camYaw,
+        yaw: this.activeHelicopter
+          ? normalizeAngle(this.activeHelicopter.state.yaw + Math.PI)
+          : this.activeVehicle
+            ? normalizeAngle(this.activeVehicle.state.yaw + Math.PI)
+            : this.camYaw,
       },
       minimapEnemies: activeAlive.map((e) => ({
         x: e.x,
         z: e.z,
         archetype: e.archetype,
       })),
-      minimapVehicles: this.vehicles.map((v) => ({
-        x: v.state.x,
-        z: v.state.z,
-        active: v === this.activeVehicle,
-      })),
+      minimapVehicles: [
+        ...this.vehicles.map((v) => ({
+          x: v.state.x,
+          z: v.state.z,
+          active: v === this.activeVehicle,
+        })),
+        ...this.helicopters.map((h) => ({
+          x: h.state.x,
+          z: h.state.z,
+          active: h === this.activeHelicopter,
+        })),
+      ],
       tdmScores: this.gameMode === 'deathmatch' ? multiplayer.scores : undefined,
       tdmTeam: this.gameMode === 'deathmatch' ? multiplayer.localTeam : undefined,
       roomCode: multiplayer.roomCode || undefined,
@@ -4719,6 +5649,19 @@ export class VoxelGameEngine {
       this.scene.remove(rp.rig.root);
     }
     this.remotePlayers.clear();
+
+    for (const h of this.helicopters) {
+      this.scene.remove(h.rig.root);
+    }
+    for (const g of this.grenades) {
+      this.scene.remove(g.mesh);
+    }
+    for (const b of this.bombs) {
+      this.scene.remove(b.mesh);
+    }
+    for (const sw of this.shockwaves) {
+      this.scene.remove(sw.mesh);
+    }
 
     window.removeEventListener('keydown', this.onKeyDownBound);
     window.removeEventListener('keyup', this.onKeyUpBound);

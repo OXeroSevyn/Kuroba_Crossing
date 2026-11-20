@@ -393,7 +393,40 @@ export function buildKurobaWorld(
   // 14. TACTICAL EXPLOSIVE HAZARD FUEL BARRELS ACROSS ALL 4 REGIONS
   buildExplosiveBarrels(root, materials, explosiveBarrels);
 
-  // 15. DRIVABLE VEHICLES DISTRIBUTED ACROSS ALL 4 REGIONS (7 cars for highway cruising & car-vs-car crashes!)
+  // 15. KUROBA MILITARY HELIPAD (with landing beacon lights & bold 'H' markings)
+  const heliPadAsm = new VoxelAssembler();
+  heliPadAsm.boxBottom(-18.0, 0, 26.0, 8.5, 0.18, 8.5, 0x22262c, 'metal');
+  heliPadAsm.boxBottom(-18.0, 0.18, 26.0, 8.1, 0.04, 8.1, 0x2b323a);
+  heliPadAsm.boxBottom(-18.0, 0.22, 29.9, 8.1, 0.02, 0.25, 0xfacc15, 'emissive');
+  heliPadAsm.boxBottom(-18.0, 0.22, 22.1, 8.1, 0.02, 0.25, 0xfacc15, 'emissive');
+  heliPadAsm.boxBottom(-21.9, 0.22, 26.0, 0.25, 0.02, 8.1, 0xfacc15, 'emissive');
+  heliPadAsm.boxBottom(-14.1, 0.22, 26.0, 0.25, 0.02, 8.1, 0xfacc15, 'emissive');
+  for (let a = 0; a < 16; a++) {
+    const ang = (a / 16) * Math.PI * 2;
+    heliPadAsm.boxBottom(-18.0 + Math.cos(ang) * 3.0, 0.22, 26.0 + Math.sin(ang) * 3.0, 0.6, 0.02, 0.6, 0xffffff);
+  }
+  heliPadAsm.boxBottom(-19.1, 0.22, 26.0, 0.42, 0.02, 2.8, 0xffffff);
+  heliPadAsm.boxBottom(-16.9, 0.22, 26.0, 0.42, 0.02, 2.8, 0xffffff);
+  heliPadAsm.boxBottom(-18.0, 0.22, 26.0, 1.8, 0.02, 0.42, 0xffffff);
+  heliPadAsm.boxBottom(-21.8, 0.22, 29.8, 0.32, 0.35, 0.32, 0x38bdf8, 'emissive');
+  heliPadAsm.boxBottom(-14.2, 0.22, 29.8, 0.32, 0.35, 0.32, 0x38bdf8, 'emissive');
+  heliPadAsm.boxBottom(-21.8, 0.22, 22.2, 0.32, 0.35, 0.32, 0x38bdf8, 'emissive');
+  heliPadAsm.boxBottom(-14.2, 0.22, 22.2, 0.32, 0.35, 0.32, 0x38bdf8, 'emissive');
+  root.add(heliPadAsm.build(materials));
+
+  colliders.push({
+    id: 'kuroba_helipad',
+    minX: -22.3,
+    maxX: -13.7,
+    minY: 0,
+    maxY: 0.22,
+    minZ: 21.7,
+    maxZ: 30.3,
+    blocksBullets: false,
+    walkableTop: true,
+  });
+
+  // 16. DRIVABLE VEHICLES DISTRIBUTED ACROSS ALL 4 REGIONS (7 cars for highway cruising & car-vs-car crashes!)
   const vehicleSpawns: VehicleSpawnSpec[] = [
     {
       id: 'veh_kei_kuroba',

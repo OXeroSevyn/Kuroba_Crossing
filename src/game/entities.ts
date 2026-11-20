@@ -1522,3 +1522,286 @@ export function buildDrivableVehicleRig(
     damageSmokePoint,
   };
 }
+
+export interface DrivableHelicopterRig {
+  root: THREE.Group;
+  body: THREE.Group;
+  fuselageGroup: THREE.Group;
+  mainRotor: THREE.Group;
+  tailRotor: THREE.Group;
+  chinMinigun: THREE.Group;
+  chinTurret: THREE.Group;
+  muzzlePointLeft: THREE.Object3D;
+  muzzlePointRight: THREE.Object3D;
+  bombDropPoint: THREE.Object3D;
+  driverSeat: THREE.Group;
+  headlightCones: THREE.Group;
+  searchlightCone: THREE.Group;
+  wreckOverlay: THREE.Group;
+  damageSmokePoint: THREE.Object3D;
+}
+
+/**
+ * Builds the high-detail AH-80 Voxel Attack Gunship rig.
+ * Complete with aerodynamic fuselage, animated 4-blade main rotor, tail anti-torque rotor,
+ * chin rotary cannon, dual bomb pods, landing skids, cockpit pilot seat, and searchlight.
+ */
+export function buildDrivableHelicopterRig(materials: SharedVoxelMaterials): DrivableHelicopterRig {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const vb = new VoxelAssembler();
+  const SLATE = 0x22272e;
+  const OLIVE = 0x364634;
+  const DARK = 0x181c22;
+  const GLASS = 0x243b53;
+  const HUD_GLOW = 0x39ff72;
+  const ROTOR_TIP = 0xf23d3d;
+  const STEEL = 0x8a99ad;
+
+  // 1. MAIN FUSELAGE & COCKPIT CHASSIS
+  // Lower keel
+  vb.boxBottom(0, 0.32, 0.2, 1.34, 0.48, 3.4, SLATE, 'metal');
+  // Forward cockpit slope
+  vb.boxBottom(0, 0.8, 0.75, 1.28, 0.62, 2.2, OLIVE);
+  vb.boxBottom(0, 1.42, 0.55, 1.16, 0.54, 1.5, SLATE);
+  // Aerodynamic nose cone
+  vb.boxBottom(0, 0.65, 1.95, 0.88, 0.46, 0.72, DARK, 'metal');
+  vb.boxBottom(0, 0.52, 2.32, 0.56, 0.32, 0.38, 0x111317, 'metal');
+
+  // Cockpit Tinted Canopy Windows
+  vb.boxBottom(0, 1.05, 1.28, 1.05, 0.48, 0.82, GLASS, 'metal');
+  vb.boxBottom(0, 1.44, 0.95, 0.98, 0.38, 0.72, GLASS, 'metal');
+  vb.boxBottom(-0.55, 1.02, 0.85, 0.08, 0.42, 1.1, GLASS, 'metal');
+  vb.boxBottom(0.55, 1.02, 0.85, 0.08, 0.42, 1.1, GLASS, 'metal');
+  // Glowing green cockpit avionics HUD
+  vb.boxBottom(0, 0.92, 1.42, 0.36, 0.18, 0.06, HUD_GLOW, 'emissive');
+
+  // Engine Turbines & Transmission Doghouse
+  vb.boxBottom(0, 1.84, -0.05, 1.02, 0.38, 1.85, DARK, 'metal');
+  vb.boxBottom(-0.52, 1.55, -0.1, 0.42, 0.36, 1.45, 0x2e3842, 'metal');
+  vb.boxBottom(0.52, 1.55, -0.1, 0.42, 0.36, 1.45, 0x2e3842, 'metal');
+
+  // 2. TAIL BOOM & EMPENNAGE
+  vb.boxBottom(0, 0.96, -1.85, 0.54, 0.46, 2.2, SLATE, 'metal');
+  vb.boxBottom(0, 1.12, -2.85, 0.38, 0.38, 1.6, OLIVE);
+  // Vertical tail fin
+  vb.boxBottom(0, 1.4, -3.55, 0.14, 1.15, 0.68, DARK, 'metal');
+  vb.boxBottom(0, 2.45, -3.7, 0.16, 0.22, 0.42, ROTOR_TIP);
+  // Horizontal tail stabilizer
+  vb.boxBottom(0, 1.55, -3.35, 1.6, 0.1, 0.42, SLATE, 'metal');
+
+  // 3. WUB-WING PYLONS (WEAPON HARDPOINTS)
+  vb.boxBottom(-1.15, 0.92, 0.25, 0.98, 0.14, 0.52, DARK, 'metal');
+  vb.boxBottom(1.15, 0.92, 0.25, 0.98, 0.14, 0.52, DARK, 'metal');
+  // Aerial Bomb Cluster Racks underneath winglets
+  vb.boxBottom(-1.25, 0.62, 0.25, 0.32, 0.28, 0.85, 0x2a3828, 'metal');
+  vb.boxBottom(1.25, 0.62, 0.25, 0.32, 0.28, 0.85, 0x2a3828, 'metal');
+  // Rocket Pod launch tubes
+  vb.boxBottom(-1.48, 0.76, 0.25, 0.28, 0.28, 0.88, 0x1f2328, 'metal');
+  vb.boxBottom(1.48, 0.76, 0.25, 0.28, 0.28, 0.88, 0x1f2328, 'metal');
+  vb.boxBottom(-1.48, 0.82, 0.7, 0.22, 0.22, 0.04, 0xffaa24, 'emissive');
+  vb.boxBottom(1.48, 0.82, 0.7, 0.22, 0.22, 0.04, 0xffaa24, 'emissive');
+
+  // 4. TUBULAR LANDING SKIDS
+  // Left skid
+  vb.boxBottom(-0.76, 0.04, 0.2, 0.14, 0.12, 3.2, STEEL, 'metal');
+  vb.boxBottom(-0.76, 0.12, 1.25, 0.12, 0.36, 0.14, STEEL, 'metal');
+  vb.boxBottom(-0.76, 0.12, -0.65, 0.12, 0.36, 0.14, STEEL, 'metal');
+  // Right skid
+  vb.boxBottom(0.76, 0.04, 0.2, 0.14, 0.12, 3.2, STEEL, 'metal');
+  vb.boxBottom(0.76, 0.12, 1.25, 0.12, 0.36, 0.14, STEEL, 'metal');
+  vb.boxBottom(0.76, 0.12, -0.65, 0.12, 0.36, 0.14, STEEL, 'metal');
+
+  body.add(vb.build(materials));
+
+  // 5. ANIMATED 4-BLADE MAIN ROTOR
+  const mainRotor = new THREE.Group();
+  mainRotor.position.set(0, 2.32, 0.05);
+  const mrAsm = new VoxelAssembler();
+  // Central rotor mast hub
+  mrAsm.boxBottom(0, 0, 0, 0.44, 0.22, 0.44, 0x181c22, 'metal');
+  // 4 aerodynamic blades with high-vis red tips
+  mrAsm.boxBottom(0, 0.08, 1.45, 0.22, 0.05, 2.65, 0x111418, 'metal');
+  mrAsm.boxBottom(0, 0.08, 2.7, 0.24, 0.06, 0.22, ROTOR_TIP, 'emissive');
+  mrAsm.boxBottom(0, 0.08, -1.45, 0.22, 0.05, 2.65, 0x111418, 'metal');
+  mrAsm.boxBottom(0, 0.08, -2.7, 0.24, 0.06, 0.22, ROTOR_TIP, 'emissive');
+  mrAsm.boxBottom(1.45, 0.08, 0, 2.65, 0.05, 0.22, 0x111418, 'metal');
+  mrAsm.boxBottom(2.7, 0.08, 0, 0.22, 0.06, 0.24, ROTOR_TIP, 'emissive');
+  mrAsm.boxBottom(-1.45, 0.08, 0, 2.65, 0.05, 0.22, 0x111418, 'metal');
+  mrAsm.boxBottom(-2.7, 0.08, 0, 0.22, 0.06, 0.24, ROTOR_TIP, 'emissive');
+  mainRotor.add(mrAsm.build(materials));
+  body.add(mainRotor);
+
+  // 6. ANIMATED 2-BLADE TAIL ROTOR
+  const tailRotor = new THREE.Group();
+  tailRotor.position.set(0.12, 2.32, -3.7);
+  const trAsm = new VoxelAssembler();
+  trAsm.boxBottom(0, 0, 0, 0.16, 0.16, 0.16, 0x181c22, 'metal');
+  trAsm.boxBottom(0.04, 0, 0.52, 0.05, 0.12, 0.95, 0x111418, 'metal');
+  trAsm.boxBottom(0.04, 0, 0.96, 0.06, 0.14, 0.14, ROTOR_TIP);
+  trAsm.boxBottom(0.04, 0, -0.52, 0.05, 0.12, 0.95, 0x111418, 'metal');
+  trAsm.boxBottom(0.04, 0, -0.96, 0.06, 0.14, 0.14, ROTOR_TIP);
+  tailRotor.add(trAsm.build(materials));
+  body.add(tailRotor);
+
+  // 7. CHIN ROTARY MINIGUN CANNON
+  const chinMinigun = new THREE.Group();
+  chinMinigun.position.set(0, 0.35, 1.95);
+  const mgAsm = new VoxelAssembler();
+  mgAsm.boxBottom(0, 0, 0, 0.28, 0.24, 0.36, 0x16181d, 'metal');
+  mgAsm.boxBottom(-0.06, 0.06, 0.42, 0.06, 0.06, 0.58, 0x22262c, 'metal');
+  mgAsm.boxBottom(0.06, 0.06, 0.42, 0.06, 0.06, 0.58, 0x22262c, 'metal');
+  mgAsm.boxBottom(0, 0.14, 0.42, 0.06, 0.06, 0.58, 0x22262c, 'metal');
+  chinMinigun.add(mgAsm.build(materials));
+  body.add(chinMinigun);
+
+  const muzzlePointLeft = new THREE.Object3D();
+  muzzlePointLeft.position.set(-0.06, 0.09, 0.76);
+  chinMinigun.add(muzzlePointLeft);
+
+  const muzzlePointRight = new THREE.Object3D();
+  muzzlePointRight.position.set(0.06, 0.09, 0.76);
+  chinMinigun.add(muzzlePointRight);
+
+  const bombDropPoint = new THREE.Object3D();
+  bombDropPoint.position.set(0, 0.32, 0.2);
+  body.add(bombDropPoint);
+
+  const damageSmokePoint = new THREE.Object3D();
+  damageSmokePoint.position.set(0, 1.9, -0.4);
+  body.add(damageSmokePoint);
+
+  // 8. PILOT IN COCKPIT SEAT
+  const driverSeat = new THREE.Group();
+  driverSeat.position.set(0, 0.88, 0.82);
+  const pilotAsm = new VoxelAssembler();
+  pilotAsm.boxBottom(0, 0, 0, 0.44, 0.38, 0.32, 0x223226); // Flight suit
+  pilotAsm.boxBottom(0, 0.38, 0, 0.42, 0.38, 0.4, 0x1f2620); // Flight helmet
+  pilotAsm.boxBottom(0, 0.46, 0.21, 0.34, 0.16, 0.06, 0x45f2ff, 'emissive'); // Visor
+  driverSeat.add(pilotAsm.build(materials));
+  driverSeat.visible = false;
+  body.add(driverSeat);
+
+  // 9. HIGH-INTENSITY DOWNWARD SEARCHLIGHT CONES
+  const headlightCones = new THREE.Group();
+  const searchlight = new THREE.SpotLight(0xfff5d0, 14, 45, Math.PI * 0.28, 0.65, 1.2);
+  searchlight.position.set(0, 0.35, 1.2);
+  searchlight.target.position.set(0, -18, 6);
+  body.add(searchlight);
+  body.add(searchlight.target);
+
+  const coneGeo = new THREE.ConeGeometry(3.5, 14, 16, 1, true);
+  coneGeo.translate(0, -7, 0);
+  coneGeo.rotateX(-0.25);
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: 0xffefb8,
+    transparent: true,
+    opacity: 0.18,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const visualCone = new THREE.Mesh(coneGeo, coneMat);
+  visualCone.position.set(0, 0.35, 1.2);
+  headlightCones.add(visualCone);
+  headlightCones.visible = true;
+  body.add(headlightCones);
+
+  // 10. CHARRED WRECK OVERLAY
+  const wreckOverlay = new THREE.Group();
+  const wreckAsm = new VoxelAssembler();
+  wreckAsm.boxBottom(0, 0.25, 0, 1.6, 0.95, 3.8, 0x161314);
+  wreckAsm.boxBottom(0, 0.85, 0.2, 1.2, 0.55, 1.9, 0x231d20);
+  wreckAsm.boxBottom(0, 0.75, 0.8, 0.8, 0.4, 0.8, 0xff551c, 'emissive');
+  wreckOverlay.add(wreckAsm.build(materials));
+  wreckOverlay.visible = false;
+  root.add(wreckOverlay);
+
+  root.add(createContactShadowMesh(2.8, materials.contactShadow));
+
+  return {
+    root,
+    body,
+    fuselageGroup: body,
+    mainRotor,
+    tailRotor,
+    chinMinigun,
+    chinTurret: chinMinigun,
+    muzzlePointLeft,
+    muzzlePointRight,
+    bombDropPoint,
+    driverSeat,
+    headlightCones,
+    searchlightCone: headlightCones,
+    wreckOverlay,
+    damageSmokePoint,
+  };
+}
+
+/**
+ * Builds a high-detail 3D Voxel Frag Grenade.
+ */
+export function buildFragGrenadeMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Ribbed explosive body (olive drab)
+  vb.boxBottom(0, 0, 0, 0.22, 0.32, 0.22, 0x485838);
+  // Collar & fuse assembly
+  vb.boxBottom(0, 0.32, 0, 0.14, 0.1, 0.14, 0x88949e, 'metal');
+  vb.boxBottom(0.04, 0.36, -0.06, 0.05, 0.14, 0.08, 0xd0d8e2, 'metal'); // Safety lever
+  vb.boxBottom(-0.06, 0.38, 0, 0.04, 0.08, 0.08, 0xff7b24, 'emissive'); // Orange detonator cap
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds a high-detail 3D Voxel Smoke Grenade.
+ */
+export function buildSmokeGrenadeMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Cylindrical canister body
+  vb.boxBottom(0, 0, 0, 0.2, 0.38, 0.2, 0xd8dde4);
+  vb.boxBottom(0, 0.24, 0, 0.22, 0.08, 0.22, 0x8b5cf6, 'emissive'); // Purple smoke indicator band
+  vb.boxBottom(0, 0.38, 0, 0.12, 0.08, 0.12, 0x4b5563, 'metal');
+  vb.boxBottom(0.04, 0.4, -0.05, 0.04, 0.12, 0.06, 0xb0b8c4, 'metal');
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds a 3D Voxel 250lb Aerial Bomb dropped from the attack helicopter.
+ */
+export function buildAeroBombMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Heavy cast-steel casing (olive green with yellow HE band)
+  vb.boxBottom(0, 0.1, 0, 0.38, 0.38, 1.25, 0x364834, 'metal');
+  vb.boxBottom(0, 0.15, 0.35, 0.42, 0.42, 0.14, 0xfacc15, 'emissive'); // Yellow hazard blast ring
+  vb.boxBottom(0, 0.16, 0.65, 0.26, 0.26, 0.24, 0x222c20, 'metal'); // Nose cone
+  vb.boxBottom(0, 0.2, 0.78, 0.12, 0.12, 0.08, 0xffffff, 'metal'); // Contact detonator pin
+  // 4 Stabilizing Tail Fins
+  vb.boxBottom(0, 0.22, -0.65, 0.06, 0.45, 0.38, 0x202920, 'metal');
+  vb.boxBottom(0, 0.22, -0.65, 0.45, 0.06, 0.38, 0x202920, 'metal');
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds an expanding ground-level volumetric shockwave blast ring mesh.
+ */
+export function buildShockwaveRingMesh(): THREE.Mesh {
+  const ringGeo = new THREE.RingGeometry(0.3, 0.95, 32);
+  ringGeo.rotateX(-Math.PI * 0.5);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffaa33,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  return new THREE.Mesh(ringGeo, ringMat);
+}

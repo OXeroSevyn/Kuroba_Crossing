@@ -86,6 +86,35 @@ export interface PlayerKinematicsState {
   walkDistance: number;
 }
 
+export type GrenadeType = 'frag' | 'smoke';
+
+export interface HelicopterState {
+  id: string;
+  name: string;
+  x: number;
+  y: number; // altitude (ground = 0.22, flight = 2..28m)
+  z: number;
+  yaw: number;
+  pitch: number; // nose tilt
+  roll: number; // bank angle
+  speed: number;
+  altitude?: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  rotorSpeed: number; // 0..1 normalized RPM
+  rotorAngle: number;
+  tailRotorAngle: number;
+  hp: number;
+  maxHp: number;
+  bombs: number;
+  maxBombs: number;
+  bombCooldown: number;
+  minigunCooldown: number;
+  destroyed: boolean;
+  respawnTimer: number;
+}
+
 export interface VehicleKinematicsState {
   id: string;
   kind: VehicleKind;
@@ -174,6 +203,16 @@ export interface HudSnapshot {
   bossMaxHp: number;
   bossName: string;
   crosshairSpread: number;
+  // Tactical Grenades
+  grenades: { frag: number; smoke: number; active: GrenadeType };
+  // Helicopter flight state
+  inHelicopter: boolean;
+  helicopterName: string;
+  helicopterAltitude: number;
+  helicopterBombs: number;
+  helicopterHp: number;
+  helicopterMaxHp: number;
+  nearbyHelicopterName: string | null;
   // Vehicle state
   inVehicle: boolean;
   vehicleName: string;

@@ -589,6 +589,57 @@ class ProceduralAudio {
       src.stop(now + 0.88);
     }
   }
+
+  public playGrenadePin(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(1440, now + 0.08);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.095);
+  }
+
+  public playGrenadeBounce(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(420, now);
+    osc.frequency.exponentialRampToValueAtTime(90, now + 0.06);
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.075);
+  }
+
+  public playBombDrop(): void {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(260, now);
+    osc.frequency.exponentialRampToValueAtTime(80, now + 0.35);
+    gain.gain.setValueAtTime(0.24, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
 }
 
 export const gameAudio = new ProceduralAudio();

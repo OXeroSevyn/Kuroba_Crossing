@@ -24,6 +24,10 @@ export interface RemotePlayerState {
   vehicleSteerAngle?: number;
   vehicleWheelSpin?: number;
   vehicleBoosting?: boolean;
+  inHelicopter?: boolean;
+  helicopterPitch?: number;
+  helicopterRoll?: number;
+  helicopterRotorSpeed?: number;
   kills: number;
   deaths: number;
   ping: number;
@@ -43,6 +47,8 @@ export interface NetworkMessage {
     | 'kill'
     | 'score_sync'
     | 'respawn'
+    | 'grenade'
+    | 'bomb'
     | 'chat';
   senderId: string;
   timestamp: number;
@@ -84,6 +90,17 @@ export type MultiplayerEventCallback = {
   }) => void;
   onKillFeed?: (entry: KillFeedEntry) => void;
   onScoreUpdate?: (scores: TdmScoreState) => void;
+  onRemoteGrenade?: (data: {
+    origin: [number, number, number];
+    velocity: [number, number, number];
+    kind: 'frag' | 'smoke';
+    senderId: string;
+  }) => void;
+  onRemoteBomb?: (data: {
+    origin: [number, number, number];
+    velocity: [number, number, number];
+    senderId: string;
+  }) => void;
   onError?: (err: string) => void;
 };
 
@@ -434,6 +451,22 @@ export class MultiplayerManager {
         this.callbacks.onScoreUpdate?.(this.scores);
         break;
       }
+
+      case 'grenade': {
+        this.callbacks.onRemoteGrenade?.(msg.payload);
+        if (this.isHost) {
+          this.broadcastMessage(msg, senderPeer);
+        }
+        break;
+      }
+
+      case 'bomb': {
+        this.callbacks.onRemoteBomb?.(msg.payload);
+        if (this.isHost) {
+          this.broadcastMessage(msg, senderPeer);
+        }
+        break;
+      }
     }
   }
 
@@ -473,6 +506,10 @@ export class MultiplayerManager {
       vehicleSteerAngle: state.vehicleSteerAngle !== undefined ? state.vehicleSteerAngle : this.lastLocalState.vehicleSteerAngle,
       vehicleWheelSpin: state.vehicleWheelSpin !== undefined ? state.vehicleWheelSpin : this.lastLocalState.vehicleWheelSpin,
       vehicleBoosting: state.vehicleBoosting !== undefined ? state.vehicleBoosting : this.lastLocalState.vehicleBoosting,
+      inHelicopter: state.inHelicopter ?? this.lastLocalState.inHelicopter ?? false,
+      helicopterPitch: state.helicopterPitch !== undefined ? state.helicopterPitch : this.lastLocalState.helicopterPitch,
+      helicopterRoll: state.helicopterRoll !== undefined ? state.helicopterRoll : this.lastLocalState.helicopterRoll,
+      helicopterRotorSpeed: state.helicopterRotorSpeed !== undefined ? state.helicopterRotorSpeed : this.lastLocalState.helicopterRotorSpeed,
       kills: state.kills ?? 0,
       deaths: state.deaths ?? 0,
       ping: 0,
@@ -522,6 +559,42 @@ export class MultiplayerManager {
         attackerId: this.localId,
         weapon,
         attackerTeam: this.localTeam,
+      },
+    };
+    this.broadcastMessage(msg);
+  }
+
+  public sendGrenade(
+    origin: [number, number, number],
+    velocity: [number, number, number],
+    kind: 'frag' | 'smoke',
+  ): void {
+    const msg: NetworkMessage = {
+      type: 'grenade',
+      senderId: this.localId,
+      timestamp: Date.now(),
+      payload: {
+        origin,
+        velocity,
+        kind,
+        senderId: this.localId,
+      },
+    };
+    this.broadcastMessage(msg);
+  }
+
+  public sendBomb(
+    origin: [number, number, number],
+    velocity: [number, number, number],
+  ): void {
+    const msg: NetworkMessage = {
+      type: 'bomb',
+      senderId: this.localId,
+      timestamp: Date.now(),
+      payload: {
+        origin,
+        velocity,
+        senderId: this.localId,
       },
     };
     this.broadcastMessage(msg);
