@@ -7,6 +7,7 @@ import { DEFAULT_LOADOUT, loadSavedLoadout, randomizeLoadout } from './game/cust
 import { PLAYER_MAX_HP, WEAPONS } from './game/rules';
 import type { GameMode, HudSnapshot, LoadoutConfig, RunSummary, WeaponId } from './game/types';
 import { VoxelGameEngine } from './game/VoxelGameEngine';
+import { gameAudio } from './game/audio';
 
 const INITIAL_HUD: HudSnapshot = {
   phase: 'title',
@@ -73,6 +74,12 @@ export default function App() {
   const [hud, setHud] = useState<HudSnapshot>(INITIAL_HUD);
   const [loadout, setLoadout] = useState<LoadoutConfig>(() => loadSavedLoadout());
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
+  const [musicVolume, setMusicVolume] = useState(() => gameAudio.getMusicVolume());
+
+  const handleMusicVolumeChange = (vol: number) => {
+    gameAudio.setMusicVolume(vol);
+    setMusicVolume(vol);
+  };
 
   useEffect(() => {
     const mount = canvasMountRef.current;
@@ -129,6 +136,7 @@ export default function App() {
 
   const handleDeploy = () => {
     setRunSummary(null);
+    gameAudio.stopLobbyMusic();
     engineRef.current?.startNewRun();
   };
 
@@ -162,6 +170,7 @@ export default function App() {
   const handleTitle = () => {
     setRunSummary(null);
     engineRef.current?.returnToTitle();
+    gameAudio.playLobbyMusic();
   };
 
   const handleToggleMute = () => {
@@ -193,6 +202,8 @@ export default function App() {
         <TitleOverlay
           bestScore={hud.bestScore}
           muted={hud.muted}
+          musicVolume={musicVolume}
+          onMusicVolumeChange={handleMusicVolumeChange}
           gameMode={hud.gameMode}
           timeOfDay={hud.timeOfDay}
           onSelectMode={handleSelectMode}

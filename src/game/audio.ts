@@ -4,6 +4,40 @@ class ProceduralAudio {
   private ctx: AudioContext | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private muted = false;
+  private lobbyMusic: HTMLAudioElement | null = null;
+  private musicVolume = 0.5;
+  private isLobbyMusicPlaying = false;
+  private unlockListenerAttached = false;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('kuroba_lobby_music_vol');
+        if (saved !== null) {
+          const parsed = parseFloat(saved);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+            this.musicVolume = parsed;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  public getMusicVolume(): number {
+    return this.musicVolume;
+  }
+
+  public setMusicVolume(vol: number): void {
+    this.musicVolume = Math.max(0, Math.min(1, vol));
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('kuroba_lobby_music_vol', this.musicVolume.toString());
+      } catch {}
+    }
+    if (this.lobbyMusic) {
+      this.lobbyMusic.volume = this.muted ? 0 : this.musicVolume;
+    }
+  }
 
   public isMuted(): boolean {
     return this.muted;
@@ -11,11 +45,69 @@ class ProceduralAudio {
 
   public setMuted(m: boolean): void {
     this.muted = m;
+    if (this.lobbyMusic) {
+      this.lobbyMusic.volume = this.muted ? 0 : this.musicVolume;
+    }
   }
 
   public toggleMute(): boolean {
     this.muted = !this.muted;
+    if (this.lobbyMusic) {
+      this.lobbyMusic.volume = this.muted ? 0 : this.musicVolume;
+    }
     return this.muted;
+  }
+
+  private initLobbyMusic(): HTMLAudioElement | null {
+    if (typeof window === 'undefined') return null;
+    if (!this.lobbyMusic) {
+      this.lobbyMusic = new Audio('/assets/audio/lobby_theme.m4a');
+      this.lobbyMusic.loop = true;
+      this.lobbyMusic.preload = 'auto';
+      this.lobbyMusic.volume = this.muted ? 0 : this.musicVolume;
+    }
+    return this.lobbyMusic;
+  }
+
+  public playLobbyMusic(): void {
+    this.isLobbyMusicPlaying = true;
+    const audio = this.initLobbyMusic();
+    if (!audio) return;
+    audio.volume = this.muted ? 0 : this.musicVolume;
+    const promise = audio.play();
+    if (promise !== undefined) {
+      promise.catch(() => {
+        // Autoplay policy prevented playback until user interaction
+        if (!this.unlockListenerAttached && typeof window !== 'undefined') {
+          this.unlockListenerAttached = true;
+          const unlock = () => {
+            if (this.isLobbyMusicPlaying && this.lobbyMusic) {
+              this.lobbyMusic.play().catch(() => {});
+            }
+            window.removeEventListener('pointerdown', unlock);
+            window.removeEventListener('keydown', unlock);
+            this.unlockListenerAttached = false;
+          };
+          window.addEventListener('pointerdown', unlock, { once: true });
+          window.addEventListener('keydown', unlock, { once: true });
+        }
+      });
+    }
+  }
+
+  public stopLobbyMusic(): void {
+    this.isLobbyMusicPlaying = false;
+    if (this.lobbyMusic) {
+      this.lobbyMusic.pause();
+      this.lobbyMusic.currentTime = 0;
+    }
+  }
+
+  public pauseLobbyMusic(): void {
+    this.isLobbyMusicPlaying = false;
+    if (this.lobbyMusic) {
+      this.lobbyMusic.pause();
+    }
   }
 
   private ensureContext(): AudioContext | null {

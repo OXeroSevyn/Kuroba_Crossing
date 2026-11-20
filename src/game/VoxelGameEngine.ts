@@ -558,6 +558,7 @@ export class VoxelGameEngine {
 
     // Apply initial atmosphere (Night Mode by default so user sees volumetric lights & bloom immediately!)
     this.applyTimeOfDay();
+    gameAudio.playLobbyMusic();
 
     // Pre-warm shaders once on GPU
     if (!this.isSoftwareGl) {
@@ -1630,6 +1631,7 @@ export class VoxelGameEngine {
 
     this.beginWave(1);
     this.phase = 'playing';
+    gameAudio.stopLobbyMusic();
     this.applyTimeOfDay();
     this.syncBodyState();
     this.forceHudEmit = true;
@@ -1677,6 +1679,7 @@ export class VoxelGameEngine {
     this.camera.fov = 54;
     this.camera.updateProjectionMatrix();
     this.phase = 'title';
+    gameAudio.playLobbyMusic();
     this.applyTimeOfDay();
     this.syncBodyState();
     this.emitHudSnapshot();

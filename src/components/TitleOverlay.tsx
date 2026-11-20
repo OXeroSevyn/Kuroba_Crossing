@@ -5,6 +5,8 @@ import { multiplayer } from '../game/multiplayer';
 interface TitleOverlayProps {
   bestScore: number;
   muted: boolean;
+  musicVolume?: number;
+  onMusicVolumeChange?: (vol: number) => void;
   gameMode: GameMode;
   timeOfDay: TimeOfDay;
   onSelectMode: (mode: GameMode) => void;
@@ -19,6 +21,8 @@ interface TitleOverlayProps {
 export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   bestScore,
   muted,
+  musicVolume = 0.5,
+  onMusicVolumeChange,
   gameMode,
   timeOfDay,
   onSelectMode,
@@ -34,6 +38,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   const [showGuideModal, setShowGuideModal] = useState(false);
   const [showTdmModal, setShowTdmModal] = useState(false);
   const [showModesFlyout, setShowModesFlyout] = useState(false);
+  const [showSoundPopover, setShowSoundPopover] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [roomCopied, setRoomCopied] = useState(false);
   const [activeRoomCode, setActiveRoomCode] = useState(multiplayer.roomCode || '');
@@ -152,21 +157,107 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
             />
           </button>
 
-          {/* Sound Toggle */}
-          <button
-            type="button"
-            title={muted ? 'Unmute' : 'Mute'}
-            onClick={onToggleMute}
-            className={`h-9 w-9 sm:h-10 sm:w-10 hover:brightness-125 active:scale-95 transition-all cursor-pointer flex items-center justify-center ${
-              muted ? 'opacity-50 grayscale' : ''
-            }`}
-          >
-            <img
-              src="/assets/neon_zombie_ui/sound.png"
-              alt="Sound"
-              className="w-full h-full object-contain drop-shadow"
-            />
-          </button>
+          {/* Sound Control Cluster with Adjustable Volume Popover */}
+          <div className="relative">
+            <button
+              type="button"
+              title={muted ? 'Unmute Audio' : `Lobby Music: ${Math.round(musicVolume * 100)}% (Click to adjust volume)`}
+              onClick={() => setShowSoundPopover((prev) => !prev)}
+              className={`h-9 w-9 sm:h-10 sm:w-10 hover:brightness-125 active:scale-95 transition-all cursor-pointer flex items-center justify-center relative ${
+                muted ? 'opacity-50 grayscale' : ''
+              }`}
+            >
+              <img
+                src="/assets/neon_zombie_ui/sound.png"
+                alt="Sound"
+                className="w-full h-full object-contain drop-shadow"
+              />
+              {!muted && (
+                <span className="absolute -bottom-1 -right-1 text-[9px] font-black font-mono text-[#fbbf24] bg-[#111622]/95 px-1 rounded border border-[#fbbf24]/50 leading-tight">
+                  {Math.round(musicVolume * 100)}%
+                </span>
+              )}
+            </button>
+
+            {/* Volume Popover */}
+            {showSoundPopover && (
+              <div className="absolute right-0 top-12 z-50 w-72 rounded-xl bg-[#131722]/95 border border-[#fbbf24]/40 p-4 shadow-2xl backdrop-blur-md flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm">🎵</span>
+                    <span className="text-xs font-black uppercase text-[#fbbf24] tracking-wider">
+                      Lobby Music
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onToggleMute}
+                    className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase transition-colors ${
+                      muted
+                        ? 'bg-red-500/20 text-red-400 border border-red-500/40'
+                        : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    }`}
+                  >
+                    {muted ? 'MUTED' : 'ACTIVE'}
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center text-[11px] font-mono">
+                    <span className="text-gray-400">Music Volume</span>
+                    <span className="text-white font-bold">{Math.round(musicVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.02"
+                    value={musicVolume}
+                    onChange={(e) => {
+                      if (muted) onToggleMute();
+                      onMusicVolumeChange?.(parseFloat(e.target.value));
+                    }}
+                    className="w-full h-2 bg-[#202534] rounded-lg appearance-none cursor-pointer accent-[#fbbf24]"
+                  />
+                  <div className="flex justify-between text-[9px] text-gray-400 font-mono mt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onMusicVolumeChange?.(0.2)}
+                      className="hover:text-[#fbbf24] cursor-pointer"
+                    >
+                      20%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMusicVolumeChange?.(0.5)}
+                      className="hover:text-[#fbbf24] cursor-pointer"
+                    >
+                      50%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMusicVolumeChange?.(0.8)}
+                      className="hover:text-[#fbbf24] cursor-pointer"
+                    >
+                      80%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onMusicVolumeChange?.(1.0)}
+                      className="hover:text-[#fbbf24] cursor-pointer"
+                    >
+                      100%
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-gray-300 bg-black/40 rounded p-2 border border-white/5 flex items-center gap-1.5">
+                  <span className="text-[#fbbf24]">📻</span>
+                  <span className="truncate font-mono">Japanese Tactical FPS Cover</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -641,6 +732,29 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
                 >
                   {muted ? 'MUTED' : 'ENABLED'}
                 </button>
+              </div>
+              <div className="flex flex-col gap-1.5 py-2 border-t border-b border-white/10">
+                <div className="flex items-center justify-between">
+                  <span>Lobby Cover Music:</span>
+                  <span className="font-mono text-[#fbbf24] font-bold">
+                    {muted ? 'MUTED' : `${Math.round(musicVolume * 100)}%`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.02"
+                  value={musicVolume}
+                  onChange={(e) => {
+                    if (muted) onToggleMute();
+                    onMusicVolumeChange?.(parseFloat(e.target.value));
+                  }}
+                  className="w-full h-2 bg-[#202534] rounded-lg appearance-none cursor-pointer accent-[#fbbf24]"
+                />
+                <div className="text-[10px] text-gray-400 font-mono">
+                  Track: Japanese Tactical FPS Cover
+                </div>
               </div>
               <div className="flex items-center justify-between">
                 <span>Atmospheric Lighting:</span>
