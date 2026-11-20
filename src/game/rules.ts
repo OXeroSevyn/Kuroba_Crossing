@@ -268,6 +268,16 @@ export function createInitialWeaponState(magMult = 1, reloadMult = 1): WeaponRun
 }
 
 export function buildWavePlan(waveNumber: number, mode: GameMode = 'mecha'): WavePlan {
+  if (mode === 'deathmatch') {
+    return {
+      wave: 1,
+      title: 'TEAM DEATHMATCH',
+      subtitle: 'RED TEAM VS BLUE TEAM · FIRST TO 25 KILLS',
+      entries: [],
+      speedMultiplier: 1,
+      maxConcurrent: 0,
+    };
+  }
   if (mode === 'zombies') {
     const wave = Math.max(1, waveNumber);
     const entries: WaveSpawnEntry[] = [];

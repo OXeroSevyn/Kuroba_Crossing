@@ -1168,6 +1168,51 @@ export function buildEnemyRig(
   };
 }
 
+let _cachedHeadlightBeamTex: THREE.CanvasTexture | null = null;
+function getSoftHeadlightBeamTexture(): THREE.CanvasTexture {
+  if (_cachedHeadlightBeamTex) return _cachedHeadlightBeamTex;
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  // Smooth quadratic longitudinal falloff along the beam (Y: 0 at bulb apex to 256 at far end)
+  // Three.js ConeGeometry UV: apex is uv.y = 1 (top of canvas y = 0), base is uv.y = 0 (bottom y = 256)
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0.0, 'rgba(255, 255, 255, 0.75)');
+  grad.addColorStop(0.08, 'rgba(255, 255, 255, 0.58)');
+  grad.addColorStop(0.22, 'rgba(255, 255, 255, 0.32)');
+  grad.addColorStop(0.48, 'rgba(255, 255, 255, 0.12)');
+  grad.addColorStop(0.78, 'rgba(255, 255, 255, 0.03)');
+  grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 256);
+
+  _cachedHeadlightBeamTex = new THREE.CanvasTexture(canvas);
+  return _cachedHeadlightBeamTex;
+}
+
+let _cachedHeadlightRoadTex: THREE.CanvasTexture | null = null;
+function getSoftHeadlightRoadTexture(): THREE.CanvasTexture {
+  if (_cachedHeadlightRoadTex) return _cachedHeadlightRoadTex;
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  // Soft forward-projected elliptical beam on road asphalt
+  const grad = ctx.createRadialGradient(64, 70, 8, 64, 115, 95);
+  grad.addColorStop(0.0, 'rgba(255, 255, 255, 0.65)');
+  grad.addColorStop(0.28, 'rgba(255, 255, 255, 0.35)');
+  grad.addColorStop(0.62, 'rgba(255, 255, 255, 0.09)');
+  grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 256);
+
+  _cachedHeadlightRoadTex = new THREE.CanvasTexture(canvas);
+  return _cachedHeadlightRoadTex;
+}
+
 /**
  * Builds 5 distinct drivable micro-voxel vehicles with articulated steering front wheels,
  * spinning rear/front tires, visible seated K-04 driver inside the cab, and nitro exhaust flames!
@@ -1409,16 +1454,18 @@ export function buildDrivableVehicleRig(
   damageSmokePoint.position.set(0, 1.05, headlightZ * 0.55);
   chassis.add(damageSmokePoint);
 
-  // Twin Volumetric Headlight Light Cones (slice dramatically through night fog!)
+  // Twin Volumetric Headlight Light Cones + Soft Road Light Projection (realistic soft atmospheric blends)
   const headlightCones = new THREE.Group();
-  const coneGeo = new THREE.ConeGeometry(1.55, 11.5, 12, 1, true);
-  coneGeo.translate(0, -5.75, 0);
+  const beamTex = getSoftHeadlightBeamTexture();
+  const coneGeo = new THREE.ConeGeometry(1.45, 11.0, 24, 2, true);
+  coneGeo.translate(0, -5.5, 0);
   coneGeo.rotateX(-Math.PI * 0.5);
   const coneColor = kind === 'aurora_coupe' ? 0x62f4ff : kind === 'fungi_buggy' ? 0xb8ff66 : 0xfff0c2;
   const coneMat = new THREE.MeshBasicMaterial({
     color: coneColor,
+    map: beamTex,
     transparent: true,
-    opacity: 0.16,
+    opacity: 0.10,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     side: THREE.DoubleSide,
@@ -1426,9 +1473,26 @@ export function buildDrivableVehicleRig(
   for (const hx of [-0.58, 0.58]) {
     const beam = new THREE.Mesh(coneGeo, coneMat);
     beam.position.set(hx, 0.84, headlightZ);
-    beam.rotation.x = 0.08;
+    beam.rotation.x = 0.05;
     headlightCones.add(beam);
   }
+
+  // Soft projected ground light pool on the road ahead of the car
+  const roadTex = getSoftHeadlightRoadTexture();
+  const roadMat = new THREE.MeshBasicMaterial({
+    color: coneColor,
+    map: roadTex,
+    transparent: true,
+    opacity: 0.16,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const roadGeo = new THREE.PlaneGeometry(3.4, 9.2);
+  roadGeo.rotateX(-Math.PI * 0.5);
+  const roadBeam = new THREE.Mesh(roadGeo, roadMat);
+  roadBeam.position.set(0, 0.04, headlightZ + 4.6);
+  headlightCones.add(roadBeam);
+
   headlightCones.visible = true;
   chassis.add(headlightCones);
 

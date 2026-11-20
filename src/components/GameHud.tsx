@@ -53,7 +53,17 @@ export const GameHud: React.FC<GameHudProps> = ({
   onRestart,
 }) => {
   const isZombies = hud.gameMode === 'zombies';
+  const isDeathmatch = hud.gameMode === 'deathmatch';
   const isNight = hud.timeOfDay === 'night';
+  const [copiedLink, setCopiedLink] = React.useState(false);
+
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}${window.location.pathname}?room=${hud.roomCode || 'tdm'}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2400);
+    });
+  };
   const activeSpec = WEAPONS[hud.weapon];
   const currentAmmo = hud.ammo[hud.weapon];
   const currentMagMax = hud.magSizes[hud.weapon] ?? activeSpec.magSize;
@@ -240,57 +250,116 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       </div>
 
-      {/* TOP-CENTER CLUSTER: Wave Counter, Hostiles Remaining, Score & Boss Bar */}
+      {/* TOP-CENTER CLUSTER: TDM Scoreboard vs Wave Counter */}
       <div className="fixed top-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
-        <div className="flex items-center gap-5 bg-[#211813]/90 border border-[#e6be74]/45 rounded px-5 py-2 shadow-[0_4px_14px_rgba(0,0,0,0.45)]">
-          <div className="text-center">
-            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
-              {isZombies ? 'HORDE' : 'WAVE'}
+        {isDeathmatch ? (
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex items-center gap-3 bg-[#121622]/95 border-2 border-[#f59e0b]/70 rounded-lg p-2 sm:px-4 sm:py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.6)]">
+              {/* Red Team Score */}
+              <div className={`flex items-center gap-3 px-3 py-1.5 rounded bg-red-950/80 border ${hud.tdmTeam === 'red' ? 'border-red-400 shadow-[0_0_12px_rgba(239,68,68,0.4)]' : 'border-red-800/50'}`}>
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]" />
+                <div className="text-left">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-red-300">
+                    RED {hud.tdmTeam === 'red' && '(YOU)'}
+                  </div>
+                  <div className="text-2xl font-black text-white tabular-nums leading-none">
+                    {hud.tdmScores?.redScore ?? 0}
+                  </div>
+                </div>
+              </div>
+
+              {/* VS Pill */}
+              <div className="text-center px-1 sm:px-3">
+                <div className="text-[11px] font-black text-[#fbbf24] tracking-widest uppercase">
+                  VS
+                </div>
+                <div className="text-[9px] font-bold text-gray-400 uppercase whitespace-nowrap">
+                  FIRST TO {hud.tdmScores?.targetKills ?? 25}
+                </div>
+              </div>
+
+              {/* Blue Team Score */}
+              <div className={`flex items-center gap-3 px-3 py-1.5 rounded bg-blue-950/80 border ${hud.tdmTeam === 'blue' ? 'border-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.4)]' : 'border-blue-800/50'}`}>
+                <div className="text-right">
+                  <div className="text-[9px] font-black uppercase tracking-wider text-blue-300">
+                    BLUE {hud.tdmTeam === 'blue' && '(YOU)'}
+                  </div>
+                  <div className="text-2xl font-black text-white tabular-nums leading-none">
+                    {hud.tdmScores?.blueScore ?? 0}
+                  </div>
+                </div>
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_8px_#3b82f6]" />
+              </div>
             </div>
-            <div className="text-xl font-display font-bold text-[#fff5e4] tabular-nums leading-tight" data-testid="hud-wave">
-              {hud.wave}
-              {hud.totalWaves !== null && (
-                <span className="text-xs text-[#b8a58e]">/{hud.totalWaves}</span>
+
+            {/* In-Game Copy Invite Link Button */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                className="pointer-events-auto px-3 py-1 rounded bg-[#eab308] hover:bg-[#facc15] text-black font-black text-[11px] uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+              >
+                <span>📋</span>
+                <span>{copiedLink ? 'INVITE LINK COPIED!' : 'COPY INVITE LINK'}</span>
+              </button>
+              {hud.roomCode && (
+                <span className="px-2 py-0.5 rounded bg-black/70 border border-white/20 text-[10px] font-mono font-bold text-[#fcd34d] uppercase">
+                  ROOM: {hud.roomCode}
+                </span>
               )}
             </div>
           </div>
-
-          <div className="w-[1px] h-7 bg-[#5c4635]" />
-
-          <div className="text-center">
-            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#ff9b70]">
-              {isZombies ? 'INFECTED' : 'HOSTILES'}
-            </div>
-            <div className="text-xl font-display font-bold text-[#ffd7c2] tabular-nums leading-tight" data-testid="hud-enemies">
-              {hud.enemiesRemaining}
-            </div>
-          </div>
-
-          <div className="w-[1px] h-7 bg-[#5c4635]" />
-
-          <div className="text-center min-w-[76px]">
-            <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
-              SCORE
-            </div>
-            <div className="text-xl font-display font-bold text-[#ffe89e] tabular-nums leading-tight" data-testid="hud-score">
-              {hud.score.toLocaleString()}
-            </div>
-          </div>
-
-          {hud.combo >= 2 && (
-            <>
-              <div className="w-[1px] h-7 bg-[#5c4635]" />
-              <div className="text-center">
-                <div className="text-[10px] font-display uppercase tracking-[0.18em] text-[#45f2ff]">
-                  CHAIN
-                </div>
-                <div className="text-xl font-display font-bold text-[#45f2ff] tabular-nums leading-tight">
-                  ×{hud.combo}
-                </div>
+        ) : (
+          <div className="flex items-center gap-5 bg-[#211813]/90 border border-[#e6be74]/45 rounded px-5 py-2 shadow-[0_4px_14px_rgba(0,0,0,0.45)]">
+            <div className="text-center">
+              <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
+                {isZombies ? 'HORDE' : 'WAVE'}
               </div>
-            </>
-          )}
-        </div>
+              <div className="text-xl font-display font-bold text-[#fff5e4] tabular-nums leading-tight" data-testid="hud-wave">
+                {hud.wave}
+                {hud.totalWaves !== null && (
+                  <span className="text-xs text-[#b8a58e]">/{hud.totalWaves}</span>
+                )}
+              </div>
+            </div>
+
+            <div className="w-[1px] h-7 bg-[#5c4635]" />
+
+            <div className="text-center">
+              <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#ff9b70]">
+                {isZombies ? 'INFECTED' : 'HOSTILES'}
+              </div>
+              <div className="text-xl font-display font-bold text-[#ffd7c2] tabular-nums leading-tight" data-testid="hud-enemies">
+                {hud.enemiesRemaining}
+              </div>
+            </div>
+
+            <div className="w-[1px] h-7 bg-[#5c4635]" />
+
+            <div className="text-center min-w-[76px]">
+              <div className="text-[10px] font-display uppercase tracking-[0.2em] text-[#e6be74]">
+                SCORE
+              </div>
+              <div className="text-xl font-display font-bold text-[#ffe89e] tabular-nums leading-tight" data-testid="hud-score">
+                {hud.score.toLocaleString()}
+              </div>
+            </div>
+
+            {hud.combo >= 2 && (
+              <>
+                <div className="w-[1px] h-7 bg-[#5c4635]" />
+                <div className="text-center">
+                  <div className="text-[10px] font-display uppercase tracking-[0.18em] text-[#45f2ff]">
+                    CHAIN
+                  </div>
+                  <div className="text-xl font-display font-bold text-[#45f2ff] tabular-nums leading-tight">
+                    ×{hud.combo}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Active Open-World Region Badge */}
         <div
@@ -426,6 +495,28 @@ export const GameHud: React.FC<GameHudProps> = ({
           </svg>
         </button>
       </div>
+
+      {/* TOP-RIGHT TDM KILL FEED */}
+      {isDeathmatch && hud.killFeed && hud.killFeed.length > 0 && (
+        <div className="fixed top-16 right-4 sm:top-18 sm:right-5 flex flex-col gap-1.5 pointer-events-none z-30 max-w-[280px]">
+          {hud.killFeed.map((kf) => (
+            <div
+              key={kf.id}
+              className="px-3 py-1.5 rounded bg-black/85 border border-white/10 text-xs font-bold flex items-center justify-between gap-2 shadow-lg backdrop-blur-sm"
+            >
+              <span className={kf.killerTeam === 'red' ? 'text-red-400 font-extrabold' : 'text-blue-400 font-extrabold'}>
+                {kf.killerName}
+              </span>
+              <span className="text-gray-400 text-[10px] uppercase font-mono px-1 py-0.5 rounded bg-white/10">
+                {kf.weapon}
+              </span>
+              <span className={kf.victimTeam === 'red' ? 'text-red-400' : 'text-blue-400'}>
+                {kf.victimName}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* BOTTOM-LEFT CLUSTER: Live 4-Region Open-World Highway Radar */}
       <div className="fixed bottom-4 left-4 sm:bottom-5 sm:left-5 hidden sm:block">

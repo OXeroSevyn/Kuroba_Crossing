@@ -1,6 +1,6 @@
 export type GamePhase = 'title' | 'customize' | 'playing' | 'paused' | 'victory' | 'gameover';
 
-export type GameMode = 'mecha' | 'zombies';
+export type GameMode = 'zombies' | 'deathmatch' | 'mecha';
 
 export type TimeOfDay = 'day' | 'night';
 
@@ -185,6 +185,13 @@ export interface HudSnapshot {
   minimapPlayer: { x: number; z: number; yaw: number };
   minimapEnemies: Array<{ x: number; z: number; archetype: EnemyArchetype }>;
   minimapVehicles: Array<{ x: number; z: number; active: boolean }>;
+  // Team Deathmatch Multiplayer
+  tdmScores?: { redScore: number; blueScore: number; targetKills: number; winner: 'red' | 'blue' | null };
+  tdmTeam?: 'red' | 'blue';
+  roomCode?: string;
+  isHost?: boolean;
+  connectedPlayersCount?: number;
+  killFeed?: Array<{ id: string; killerName: string; killerTeam: 'red' | 'blue'; victimName: string; victimTeam: 'red' | 'blue'; weapon: WeaponId; timestamp: number }>;
 }
 
 export interface RunSummary {

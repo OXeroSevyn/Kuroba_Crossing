@@ -90,13 +90,23 @@ export default function App() {
     setLoadout(engine.getLoadout());
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get('mode') === 'mecha') {
+    const roomParam = params.get('room') || params.get('join');
+    if (roomParam) {
+      engine.setGameMode('deathmatch');
+      engine.joinTdm(roomParam).then(() => {
+        engine.startNewRun();
+      }).catch((e) => {
+        console.warn('Failed to join room from URL parameter:', e);
+      });
+    } else if (params.get('mode') === 'mecha') {
       engine.setGameMode('mecha');
+    } else if (params.get('mode') === 'deathmatch') {
+      engine.setGameMode('deathmatch');
     }
     if (params.get('time') === 'day') {
       engine.setTimeOfDay('day');
     }
-    if (params.get('autostart') === '1') {
+    if (params.get('autostart') === '1' && !roomParam) {
       engine.startNewRun();
       const zoneParam = params.get('zone');
       if (zoneParam === 'aurora' || zoneParam === 'fungi' || zoneParam === 'snowpeak') {
@@ -187,8 +197,11 @@ export default function App() {
           timeOfDay={hud.timeOfDay}
           onSelectMode={handleSelectMode}
           onToggleTimeOfDay={handleToggleTimeOfDay}
-          onStart={handleOpenCustomize}
+          onStart={handleDeploy}
+          onOpenCustomize={handleOpenCustomize}
           onToggleMute={handleToggleMute}
+          onHostTdm={(code) => engineRef.current?.hostTdm(code) ?? Promise.resolve('')}
+          onJoinTdm={(code) => engineRef.current?.joinTdm(code) ?? Promise.resolve('')}
         />
       )}
 
@@ -197,12 +210,14 @@ export default function App() {
           loadout={loadout}
           activeWeapon={hud.weapon}
           timeOfDay={hud.timeOfDay}
+          gameMode={hud.gameMode}
           onSelectOption={handleSelectLoadoutOption}
           onRandomize={handleRandomizeLoadout}
           onReset={handleResetLoadout}
           onTabChange={handleCustomizeTabChange}
           onSelectWeapon={handleSelectWeapon}
           onToggleTimeOfDay={handleToggleTimeOfDay}
+          onSelectMode={handleSelectMode}
           onBackToTitle={handleTitle}
           onDeploy={handleDeploy}
         />

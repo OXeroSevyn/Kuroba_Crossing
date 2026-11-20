@@ -331,11 +331,28 @@ export function buildKurobaWorld(
   disposables.push(volTex, mistTex);
 
   // Warm cinematic volumetric lamp cones & god-rays over Kuroba Crossing Station
-  addVolumetricCone(root, volumetricLights, disposables, volTex, -7.8, 5.2, 10.8, 1.9, 5.4, 0xffd07a, 0.24, 0.22, 1.0);
-  addVolumetricCone(root, volumetricLights, disposables, volTex, 5.8, 5.2, 10.8, 1.9, 5.4, 0xffd07a, 0.24, 0.22, 1.0);
-  addVolumetricCone(root, volumetricLights, disposables, volTex, 15.0, 5.2, 16.8, 1.9, 5.4, 0xffd07a, 0.24, 0.22, 1.0);
-  addVolumetricCone(root, volumetricLights, disposables, volTex, -15.0, 5.2, 16.8, 1.9, 5.4, 0xffd07a, 0.24, 0.22, 1.0);
-  addVolumetricGodRay(root, volumetricLights, disposables, volTex, -2, 18, -8, 6.2, 24, 0xffe4a8, 0.14, 1.0, 0.35, 0.22, -0.18);
+  for (const [lx, ly, lz] of KUROBA_STREETLAMP_COORDS) {
+    const headX = lx;
+    const headY = ly + 4.35;
+    const headZ = lz + (lz > 12 ? -0.8 : 0.8);
+    addVolumetricCone(
+      root,
+      volumetricLights,
+      disposables,
+      volTex,
+      headX,
+      headY,
+      headZ,
+      2.1,
+      headY,
+      0xffd07a,
+      0.15,
+      0.10,
+      0.85,
+      mistTex,
+    );
+  }
+  addVolumetricGodRay(root, volumetricLights, disposables, volTex, -2, 18, -8, 6.2, 24, 0xffe4a8, 0.07, 0.18, 0.35, 0.22, -0.18);
 
   buildAuroraCity(
     root,
@@ -794,6 +811,18 @@ function buildBusStopShelter(
 }
 
 /**
+ * Japanese streetlamp pole coordinates along Kuroba Crossing station road and approaches.
+ */
+export const KUROBA_STREETLAMP_COORDS: Array<[number, number, number]> = [
+  [-10.5, 0, 10.4],
+  [11.8, 0, 10.4],
+  [-16.0, 0, 17.0],
+  [13.5, 0, 17.0],
+  [-8.5, 0, -5.5],
+  [9.2, 0, -5.5],
+];
+
+/**
  * White metal guardrails & dark iron Japanese streetlamp poles along the asphalt road.
  */
 function buildGuardrailsAndLamps(
@@ -826,15 +855,7 @@ function buildGuardrailsAndLamps(
   }
 
   // Streetlamp poles (positioned cleanly beside the road without obstructing the central crossing vista)
-  const lampPositions: Array<[number, number, number]> = [
-    [-10.5, 0, 10.4],
-    [11.8, 0, 10.4],
-    [-16.0, 0, 17.0],
-    [13.5, 0, 17.0],
-    [-8.5, 0, -5.5],
-    [9.2, 0, -5.5],
-  ];
-  for (const [lx, ly, lz] of lampPositions) {
+  for (const [lx, ly, lz] of KUROBA_STREETLAMP_COORDS) {
     vb.boxBottom(lx, ly, lz, 0.22, 4.6, 0.22, POST_IRON, 'metal');
     vb.boxBottom(lx, ly + 4.45, lz + (lz > 12 ? -0.45 : 0.45), 0.2, 0.18, 0.95, POST_IRON, 'metal');
     vb.boxBottom(lx, ly + 4.28, lz + (lz > 12 ? -0.8 : 0.8), 0.34, 0.18, 0.34, LAMP_GLOW, 'emissive');
@@ -1369,9 +1390,10 @@ function createVolumetricBeamTexture(): THREE.CanvasTexture {
   c.height = 128;
   const ctx = c.getContext('2d')!;
   const grad = ctx.createLinearGradient(0, 0, 0, 128);
-  grad.addColorStop(0.0, 'rgba(255,255,255,0.88)');
-  grad.addColorStop(0.28, 'rgba(255,255,255,0.46)');
-  grad.addColorStop(0.72, 'rgba(255,255,255,0.12)');
+  grad.addColorStop(0.0, 'rgba(255,255,255,0.72)');
+  grad.addColorStop(0.18, 'rgba(255,255,255,0.48)');
+  grad.addColorStop(0.45, 'rgba(255,255,255,0.22)');
+  grad.addColorStop(0.75, 'rgba(255,255,255,0.06)');
   grad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 64, 128);
@@ -1414,8 +1436,9 @@ function addVolumetricCone(
   baseOpacity: number,
   dayScale = 0.2,
   nightScale = 1.0,
+  groundTex?: THREE.CanvasTexture,
 ): void {
-  const geo = new THREE.ConeGeometry(radius, height, 14, 1, true);
+  const geo = new THREE.ConeGeometry(radius, height, 24, 1, true);
   geo.translate(0, -height * 0.5, 0);
   const mat = new THREE.MeshBasicMaterial({
     color: colorHex,
@@ -1437,6 +1460,30 @@ function addVolumetricCone(
     nightScale,
     phase: (x * 0.17 + z * 0.13) % (Math.PI * 2),
   });
+
+  if (groundTex) {
+    const groundGeo = new THREE.CircleGeometry(radius * 0.88, 20);
+    groundGeo.rotateX(-Math.PI * 0.5);
+    const groundMat = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      map: groundTex,
+      transparent: true,
+      opacity: baseOpacity * 0.55,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+    groundMesh.position.set(x, 0.02, z);
+    root.add(groundMesh);
+    disposables.push(groundGeo, groundMat);
+    list.push({
+      mesh: groundMesh,
+      baseOpacity: baseOpacity * 0.55,
+      dayScale,
+      nightScale,
+      phase: (x * 0.17 + z * 0.13) % (Math.PI * 2),
+    });
+  }
 }
 
 function addVolumetricGodRay(
