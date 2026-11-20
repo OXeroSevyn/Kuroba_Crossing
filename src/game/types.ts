@@ -4,7 +4,7 @@ export type GameMode = 'zombies' | 'deathmatch' | 'mecha';
 
 export type TimeOfDay = 'day' | 'night';
 
-export type WeaponId = 'pulse' | 'scatter' | 'rail';
+export type WeaponId = 'pulse' | 'scatter' | 'rail' | 'rpg' | 'katana';
 
 export type WorldZoneId = 'kuroba' | 'aurora' | 'fungi' | 'snowpeak';
 
@@ -31,7 +31,7 @@ export interface LoadoutConfig {
 
 export interface WeaponSpec {
   id: WeaponId;
-  slot: 1 | 2 | 3;
+  slot: 1 | 2 | 3 | 4 | 5;
   name: string;
   role: string;
   damage: number;
@@ -113,6 +113,62 @@ export interface HelicopterState {
   minigunCooldown: number;
   destroyed: boolean;
   respawnTimer: number;
+}
+
+export interface TankState {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  turretYaw: number;
+  cannonPitch: number;
+  speed: number;
+  vx: number;
+  vz: number;
+  treadSpin: number;
+  hp: number;
+  maxHp: number;
+  cannonCooldown: number;
+  coaxialCooldown: number;
+  destroyed: boolean;
+  respawnTimer: number;
+}
+
+export interface C4EntityState {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  stuckVehicleId?: string;
+  beepTimer: number;
+}
+
+export interface SentryEntityState {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  maxHp: number;
+  fireCooldown: number;
+  targetEnemyId: number | null;
+  scanPhase: number;
+}
+
+export interface DestructiblePropSpec {
+  id: string;
+  kind: 'fence' | 'crate' | 'lantern' | 'canopy';
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  hp: number;
+  maxHp: number;
+  destroyed: boolean;
+  colliderId: string;
 }
 
 export interface VehicleKinematicsState {
@@ -221,6 +277,19 @@ export interface HudSnapshot {
   vehicleHp: number;
   vehicleMaxHp: number;
   nearbyVehicleName: string | null;
+  // Tank battle state
+  inTank: boolean;
+  tankName: string;
+  tankHp: number;
+  tankMaxHp: number;
+  tankCannonReady: boolean;
+  nearbyTankName: string | null;
+  // Gadgets & Special Equipment
+  c4Count: number;
+  sentriesAvailable: number;
+  katanaReady: boolean;
+  overhealth: number;
+  interactionPrompt: string | null;
   minimapPlayer: { x: number; z: number; yaw: number };
   minimapEnemies: Array<{ x: number; z: number; archetype: EnemyArchetype }>;
   minimapVehicles: Array<{ x: number; z: number; active: boolean }>;

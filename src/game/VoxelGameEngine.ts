@@ -16,15 +16,24 @@ import {
   buildAeroBombMesh,
   buildDrivableHelicopterRig,
   buildDrivableVehicleRig,
+  buildDrivableTankRig,
   buildEnemyRig,
   buildFragGrenadeMesh,
   buildHeroRig,
   buildShockwaveRingMesh,
   buildSmokeGrenadeMesh,
+  buildRpgMesh,
+  buildRpgRocketMesh,
+  buildKatanaMesh,
+  buildC4Mesh,
+  buildSentryRig,
+  buildDestructiblePropMesh,
   type DrivableHelicopterRig,
   type DrivableVehicleRig,
+  type DrivableTankRig,
   type EnemyMeshBundle,
   type HeroRig,
+  type SentryRig,
 } from './entities';
 import {
   ARENA_HALF_EXTENT,
@@ -65,6 +74,10 @@ import type {
   GamePhase,
   GrenadeType,
   HelicopterState,
+  TankState,
+  C4EntityState,
+  SentryEntityState,
+  DestructiblePropSpec,
   HudSnapshot,
   LoadoutConfig,
   PlayerKinematicsState,
@@ -78,7 +91,7 @@ import type {
   WorldZoneId,
 } from './types';
 import { multiplayer, type RemotePlayerState, type PlayerTeam, type KillFeedEntry } from './multiplayer';
-import { createSharedVoxelMaterials, type SharedVoxelMaterials } from './voxelBuilder';
+import { VoxelAssembler, createSharedVoxelMaterials, type SharedVoxelMaterials } from './voxelBuilder';
 import { buildKurobaWorld, type BuiltWorld, type ExplosiveBarrelItem } from './worldBuilder';
 
 const BEST_SCORE_STORAGE_KEY = 'kuroba_crossing_best_score_v1';
@@ -195,6 +208,50 @@ interface ActiveBombEntity {
   vz: number;
   mesh: THREE.Group;
   detonated: boolean;
+}
+
+interface ActiveTank {
+  state: TankState;
+  rig: DrivableTankRig;
+  damageSmokeAccum: number;
+}
+
+interface ActiveC4 {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  stuck: boolean;
+  mesh: THREE.Group;
+  beepTimer: number;
+}
+
+interface ActiveSentry {
+  state: SentryEntityState;
+  rig: SentryRig;
+  damageSmokeAccum: number;
+}
+
+interface DestructiblePropInstance {
+  spec: DestructiblePropSpec;
+  mesh: THREE.Group;
+  collider: ColliderBox;
+}
+
+interface ActiveRocketEntity {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  mesh: THREE.Group;
+  life: number;
+  smokeTimer: number;
 }
 
 interface KineticShellCasing {
@@ -375,6 +432,45 @@ export class VoxelGameEngine {
   private playerGrenades = { frag: 3, smoke: 2, active: 'frag' as GrenadeType };
   private grenadeJustPressed = false;
   private grenadeSwitchJustPressed = false;
+
+  // Tanks & Armored Warfare
+  private tanks: ActiveTank[] = [];
+  private activeTank: ActiveTank | null = null;
+  private nearbyTank: ActiveTank | null = null;
+
+  // Tactical Gadgets: C4 & Sentries
+  private c4Entities: ActiveC4[] = [];
+  private c4Count = 3;
+  private c4JustPressed = false;
+  private sentries: ActiveSentry[] = [];
+  private sentriesAvailable = 1;
+  private sentryJustPressed = false;
+
+  // Destructible Props & Moving Train
+  private destructibleProps: DestructiblePropInstance[] = [];
+  private trainCar: {
+    mesh: THREE.Group;
+    x: number;
+    y: number;
+    z: number;
+    speed: number;
+    dir: number;
+  } | null = null;
+
+  // Economy & Buffs
+  private overhealth = 0;
+  private speedBoostTimer = 0;
+  private interactionPrompt: string | null = null;
+  private interactJustPressed = false;
+
+  // RPG Rockets
+  private activeRockets: ActiveRocketEntity[] = [];
+
+  // Mobile Touch Input State
+  private touchMoveX = 0;
+  private touchMoveY = 0;
+  private touchLookDx = 0;
+  private touchLookDy = 0;
 
   // Kinetic Shell Casings & Shockwaves
   private shellCasings: KineticShellCasing[] = [];
@@ -627,6 +723,9 @@ export class VoxelGameEngine {
     // Spawn all live drivable open-world vehicles across all 4 regions
     this.initVehicles();
     this.initHelicopters();
+    this.initTanks();
+    this.initDestructibleProps();
+    this.initTrain();
 
     // Pre-allocate pooled voxel particles, blood splatters, explosions, projectiles & pickups
     this.initParticlePool();
@@ -773,6 +872,10 @@ export class VoxelGameEngine {
     for (let i = 0; i < this.helicopters.length; i++) {
       const h = this.helicopters[i];
       h.rig.searchlightCone.visible = isNight && !h.state.destroyed;
+    }
+    for (let i = 0; i < this.tanks.length; i++) {
+      const t = this.tanks[i];
+      t.rig.headlightCones.visible = isNight && !t.state.destroyed;
     }
 
     // Sync volumetric light cones & mist opacities immediately
@@ -942,6 +1045,164 @@ export class VoxelGameEngine {
     this.playerGrenades = { frag: 3, smoke: 2, active: 'frag' };
   }
 
+  private initTanks(): void {
+    this.tanks = [];
+    const rig = buildDrivableTankRig(this.materials);
+    rig.root.position.set(-68.0, 0.03, 18.0);
+    rig.root.rotation.set(0, Math.PI * 0.44, 0);
+    rig.driverSeat.visible = false;
+    rig.headlightCones.visible = this.timeOfDay === 'night';
+    this.scene.add(rig.root);
+
+    const state: TankState = {
+      id: 'type-90-mbt',
+      name: 'TYPE-90 VOXEL MBT',
+      x: -68.0,
+      y: 0.03,
+      z: 18.0,
+      yaw: Math.PI * 0.44,
+      turretYaw: 0,
+      cannonPitch: 0.05,
+      speed: 0,
+      vx: 0,
+      vz: 0,
+      treadSpin: 0,
+      hp: 500,
+      maxHp: 500,
+      cannonCooldown: 0,
+      coaxialCooldown: 0,
+      destroyed: false,
+      respawnTimer: 0,
+    };
+
+    this.tanks.push({
+      state,
+      rig,
+      damageSmokeAccum: 0,
+    });
+  }
+
+  private resetTanks(): void {
+    if (this.activeTank) {
+      this.activeTank.rig.driverSeat.visible = false;
+      this.activeTank = null;
+    }
+    this.nearbyTank = null;
+    for (const t of this.tanks) {
+      t.state.x = -68.0;
+      t.state.y = 0.03;
+      t.state.z = 18.0;
+      t.state.yaw = Math.PI * 0.44;
+      t.state.turretYaw = 0;
+      t.state.cannonPitch = 0.05;
+      t.state.speed = 0;
+      t.state.vx = 0;
+      t.state.vz = 0;
+      t.state.treadSpin = 0;
+      t.state.hp = t.state.maxHp;
+      t.state.destroyed = false;
+      t.state.respawnTimer = 0;
+      t.state.cannonCooldown = 0;
+      t.state.coaxialCooldown = 0;
+      t.rig.root.position.set(-68.0, 0.03, 18.0);
+      t.rig.root.rotation.set(0, Math.PI * 0.44, 0);
+      t.rig.turret.rotation.y = 0;
+      t.rig.cannonBarrel.rotation.x = 0;
+      t.rig.wreckOverlay.visible = false;
+      t.rig.headlightCones.visible = this.timeOfDay === 'night';
+    }
+  }
+
+  private initDestructibleProps(): void {
+    for (const p of this.destructibleProps) {
+      this.scene.remove(p.mesh);
+    }
+    this.destructibleProps = [];
+
+    const propSpecs: Array<{ kind: 'fence' | 'crate' | 'lantern' | 'canopy'; x: number; y: number; z: number; yaw: number; hp: number; w: number; h: number; d: number }> = [
+      { kind: 'fence', x: -6.5, y: 0, z: 2.5, yaw: 0, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+      { kind: 'fence', x: 6.5, y: 0, z: 2.5, yaw: 0, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+      { kind: 'fence', x: -6.5, y: 0, z: -10.5, yaw: 0, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+      { kind: 'fence', x: 6.5, y: 0, z: -10.5, yaw: 0, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+      { kind: 'crate', x: -14.0, y: 0, z: 6.5, yaw: 0.25, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'crate', x: -12.5, y: 0, z: 6.2, yaw: -0.15, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'crate', x: 12.0, y: 0, z: 8.5, yaw: 0.4, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'crate', x: 13.5, y: 0, z: 8.2, yaw: -0.3, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'lantern', x: -18.0, y: 0, z: 12.0, yaw: 0, hp: 80, w: 0.7, h: 1.9, d: 0.7 },
+      { kind: 'lantern', x: 18.0, y: 0, z: 12.0, yaw: 0, hp: 80, w: 0.7, h: 1.9, d: 0.7 },
+      { kind: 'canopy', x: -16.0, y: 0, z: -6.5, yaw: Math.PI * 0.5, hp: 60, w: 1.6, h: 2.2, d: 2.2 },
+      { kind: 'canopy', x: 14.5, y: 0, z: -6.5, yaw: -Math.PI * 0.5, hp: 60, w: 1.6, h: 2.2, d: 2.2 },
+      { kind: 'crate', x: -62.0, y: 0, z: 14.0, yaw: 0.1, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'crate', x: -63.5, y: 0, z: 14.5, yaw: -0.2, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
+      { kind: 'fence', x: -74.0, y: 0, z: 22.0, yaw: Math.PI * 0.25, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+    ];
+
+    for (let i = 0; i < propSpecs.length; i++) {
+      const p = propSpecs[i];
+      const mesh = buildDestructiblePropMesh(p.kind, this.materials);
+      mesh.position.set(p.x, p.y, p.z);
+      mesh.rotation.y = p.yaw;
+      this.scene.add(mesh);
+
+      const collider: ColliderBox = {
+        id: `prop-col-${i}`,
+        minX: p.x - p.w * 0.5,
+        maxX: p.x + p.w * 0.5,
+        minY: p.y,
+        maxY: p.y + p.h,
+        minZ: p.z - p.d * 0.5,
+        maxZ: p.z + p.d * 0.5,
+        blocksBullets: true,
+        walkableTop: true,
+      };
+      this.world.colliders.push(collider);
+
+      const spec: DestructiblePropSpec = {
+        id: `prop-${i}`,
+        kind: p.kind,
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        yaw: p.yaw,
+        hp: p.hp,
+        maxHp: p.hp,
+        destroyed: false,
+        colliderId: `prop-col-${i}`,
+      };
+
+      this.destructibleProps.push({ spec, mesh, collider });
+    }
+  }
+
+  private initTrain(): void {
+    if (this.trainCar) {
+      this.scene.remove(this.trainCar.mesh);
+    }
+    const trainGroup = new THREE.Group();
+    const vb = new VoxelAssembler();
+    vb.boxBottom(0, 0.1, 0, 2.8, 0.65, 14.0, 0x181a1f, 'metal');
+    vb.boxBottom(0, 0.75, 0, 2.9, 2.1, 13.8, 0xf0f3f6);
+    vb.boxBottom(0, 1.25, 0, 2.95, 0.38, 13.85, 0x16a34a);
+    vb.boxBottom(0, 1.7, 0, 2.96, 0.65, 13.2, 0x1e293b, 'metal');
+    vb.boxBottom(0, 1.1, 6.92, 0.65, 0.35, 0.2, 0xfff4dc, 'emissive');
+    vb.boxBottom(0, 1.1, -6.92, 0.65, 0.35, 0.2, 0xef4444, 'emissive');
+    vb.boxBottom(0, 2.85, -2.5, 1.8, 0.45, 3.2, 0x94a3b8, 'metal');
+    vb.boxBottom(0, 2.85, 2.5, 1.8, 0.45, 3.2, 0x94a3b8, 'metal');
+    trainGroup.add(vb.build(this.materials));
+
+    trainGroup.position.set(0, 0.1, -80);
+    this.scene.add(trainGroup);
+
+    this.trainCar = {
+      mesh: trainGroup,
+      x: 0,
+      y: 0.1,
+      z: -80,
+      speed: 9.5,
+      dir: 1,
+    };
+  }
+
   private resetVehicles(): void {
     if (this.activeVehicle) {
       this.activeVehicle.rig.driverSeat.visible = false;
@@ -950,6 +1211,17 @@ export class VoxelGameEngine {
     }
     this.nearbyVehicle = null;
     this.resetHelicopters();
+    this.resetTanks();
+    for (const c of this.c4Entities) this.scene.remove(c.mesh);
+    this.c4Entities = [];
+    this.c4Count = 3;
+    for (const s of this.sentries) this.scene.remove(s.rig.root);
+    this.sentries = [];
+    this.sentriesAvailable = 1;
+    for (const r of this.activeRockets) this.scene.remove(r.mesh);
+    this.activeRockets = [];
+    this.overhealth = 0;
+    this.speedBoostTimer = 0;
     this.vehicleEnterJustPressed = false;
     this.hero.root.visible = true;
 
@@ -1500,17 +1772,22 @@ export class VoxelGameEngine {
       } else if (code === 'KeyR') {
         this.reloadJustPressed = true;
       } else if (code === 'KeyE') {
-        if (this.activeVehicle || this.nearbyVehicle || this.activeHelicopter || this.nearbyHelicopter) {
+        if (this.activeVehicle || this.nearbyVehicle || this.activeHelicopter || this.nearbyHelicopter || this.activeTank || this.nearbyTank) {
           e.preventDefault();
           this.vehicleEnterJustPressed = true;
         }
       } else if (code === 'KeyG') {
-        if (!this.activeVehicle && !this.activeHelicopter) {
+        if (!this.activeVehicle && !this.activeHelicopter && !this.activeTank) {
           e.preventDefault();
-          this.grenadeJustPressed = true;
+          this.c4JustPressed = true;
+        }
+      } else if (code === 'KeyT') {
+        if (!this.activeVehicle && !this.activeHelicopter && !this.activeTank) {
+          e.preventDefault();
+          this.sentryJustPressed = true;
         }
       } else if (code === 'KeyH') {
-        if (!this.activeVehicle && !this.activeHelicopter) {
+        if (!this.activeVehicle && !this.activeHelicopter && !this.activeTank) {
           e.preventDefault();
           this.grenadeSwitchJustPressed = true;
         }
@@ -1518,6 +1795,9 @@ export class VoxelGameEngine {
         if (this.activeHelicopter) {
           e.preventDefault();
           this.dropHelicopterBomb();
+        } else if (!this.activeVehicle && !this.activeTank) {
+          e.preventDefault();
+          this.interactJustPressed = true;
         }
       } else if (code === 'Digit1') {
         this.pendingWeaponSwitch = 'pulse';
@@ -1525,6 +1805,10 @@ export class VoxelGameEngine {
         this.pendingWeaponSwitch = 'scatter';
       } else if (code === 'Digit3') {
         this.pendingWeaponSwitch = 'rail';
+      } else if (code === 'Digit4') {
+        this.pendingWeaponSwitch = 'rpg';
+      } else if (code === 'Digit5') {
+        this.pendingWeaponSwitch = 'katana';
       }
     }
 
@@ -2669,6 +2953,50 @@ export class VoxelGameEngine {
   }
 
   private tryToggleVehicle(): void {
+    if (this.activeTank) {
+      const t = this.activeTank;
+      const exitX = t.state.x - Math.cos(t.state.yaw) * 3.0;
+      const exitZ = t.state.z + Math.sin(t.state.yaw) * 3.0;
+      const resolved = resolveCylinderWorldCollision(
+        exitX,
+        0.1,
+        exitZ,
+        PLAYER_RADIUS,
+        PLAYER_HEIGHT,
+        this.world.colliders,
+      );
+      this.player.x = resolved.x;
+      this.player.y = resolved.groundY;
+      this.player.z = resolved.z;
+      this.player.vx = 0;
+      this.player.vy = 0;
+      this.player.vz = 0;
+      this.player.facingYaw = t.state.yaw;
+
+      t.rig.driverSeat.visible = false;
+      this.activeTank = null;
+      this.hero.root.visible = true;
+      this.applyTimeOfDay();
+      gameAudio.playPickup();
+      this.forceHudEmit = true;
+      return;
+    }
+
+    if (this.nearbyTank && !this.nearbyTank.state.destroyed) {
+      const t = this.nearbyTank;
+      this.activeTank = t;
+      this.nearbyTank = null;
+      this.hero.root.visible = false;
+      this.hero.muzzleFlash.visible = false;
+      t.rig.driverSeat.visible = true;
+      this.camYaw = normalizeAngle(t.state.yaw + Math.PI);
+      this.camPitch = 0.22;
+      this.applyTimeOfDay();
+      gameAudio.playDash();
+      this.forceHudEmit = true;
+      return;
+    }
+
     if (this.activeHelicopter) {
       // Exit helicopter safely to the side
       const h = this.activeHelicopter;
@@ -3077,6 +3405,28 @@ export class VoxelGameEngine {
       const hDmg = calculateExplosionDamage(hDist, radius, 140);
       if (hDmg > 0) {
         this.damageHelicopter(h, hDmg);
+      }
+    }
+
+    // Chain-reaction damage to tanks!
+    for (let i = 0; i < this.tanks.length; i++) {
+      const t = this.tanks[i];
+      if (t.state.destroyed) continue;
+      const tDist = Math.hypot(t.state.x - x, t.state.z - z);
+      const tDmg = calculateExplosionDamage(tDist, radius * 1.1, 160);
+      if (tDmg > 0) {
+        this.damageTank(t, tDmg, x, z);
+      }
+    }
+
+    // Chain-reaction damage to destructible props!
+    for (let i = 0; i < this.destructibleProps.length; i++) {
+      const prop = this.destructibleProps[i];
+      if (prop.spec.destroyed) continue;
+      const pDist = Math.hypot(prop.spec.x - x, prop.spec.z - z);
+      const pDmg = calculateExplosionDamage(pDist, radius, 120);
+      if (pDmg > 0) {
+        this.damageDestructibleProp(prop, pDmg);
       }
     }
 
@@ -3642,6 +3992,600 @@ export class VoxelGameEngine {
     }
   }
 
+  private updateTanks(dt: number): void {
+    let closest: ActiveTank | null = null;
+    let closestDist = 5.2;
+
+    for (let i = 0; i < this.tanks.length; i++) {
+      const t = this.tanks[i];
+      if (t === this.activeTank) continue;
+
+      if (t.state.destroyed) {
+        t.damageSmokeAccum += dt;
+        if (t.damageSmokeAccum > 0.22) {
+          t.damageSmokeAccum = 0;
+          this.spawnSmoke(t.state.x, t.state.y + 1.2, t.state.z, 3, 0.45, 1.2);
+        }
+        t.state.respawnTimer += dt;
+        if (t.state.respawnTimer > 25.0) {
+          t.state.destroyed = false;
+          t.state.hp = t.state.maxHp;
+          t.state.respawnTimer = 0;
+          t.rig.wreckOverlay.visible = false;
+          this.spawnParticles(t.state.x, 1.0, t.state.z, 20, [0x48bb78, 0x38a169], 2.0, 5.0, 0.1, 0.2, 10, 0.6);
+        }
+        continue;
+      }
+
+      if (!this.activeTank && !this.activeVehicle && !this.activeHelicopter) {
+        const d = Math.hypot(t.state.x - this.player.x, t.state.z - this.player.z);
+        if (d < closestDist) {
+          closestDist = d;
+          closest = t;
+        }
+      }
+    }
+
+    if (closest !== this.nearbyTank) {
+      this.nearbyTank = closest;
+      this.forceHudEmit = true;
+    }
+  }
+
+  private updateActiveTank(dt: number): void {
+    const t = this.activeTank;
+    if (!t) return;
+
+    if (t.state.destroyed) {
+      this.tryToggleVehicle();
+      return;
+    }
+
+    if (t.state.cannonCooldown > 0) t.state.cannonCooldown = Math.max(0, t.state.cannonCooldown - dt);
+    if (t.state.coaxialCooldown > 0) t.state.coaxialCooldown = Math.max(0, t.state.coaxialCooldown - dt);
+
+    const forward =
+      (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp') ? 1 : 0) -
+      (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown') ? 1 : 0) +
+      this.touchMoveY;
+    const steer =
+      (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight') ? 1 : 0) -
+      (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft') ? 1 : 0) +
+      this.touchMoveX;
+
+    const turnRate = 1.6;
+    if (Math.abs(steer) > 0.05) {
+      t.state.yaw -= steer * turnRate * dt;
+    }
+
+    const targetSpeed = forward * (forward > 0 ? 12.5 : 6.0);
+    const accel = forward !== 0 ? 9.5 : 14.0;
+    t.state.speed += (targetSpeed - t.state.speed) * Math.min(1, accel * dt);
+
+    const moveDist = t.state.speed * dt;
+    const fwdX = Math.sin(t.state.yaw);
+    const fwdZ = Math.cos(t.state.yaw);
+    const rawX = t.state.x + fwdX * moveDist;
+    const rawZ = t.state.z + fwdZ * moveDist;
+
+    const resolved = resolveCylinderWorldCollision(rawX, 0.03, rawZ, 1.8, 1.8, this.world.colliders);
+    t.state.x = resolved.x;
+    t.state.z = resolved.z;
+
+    t.state.treadSpin += t.state.speed * dt * 4.2;
+    for (const rw of t.rig.leftTreads) {
+      rw.rotation.x = t.state.treadSpin;
+    }
+    for (const rw of t.rig.rightTreads) {
+      rw.rotation.x = t.state.treadSpin;
+    }
+
+    const desiredTurretYaw = normalizeAngle((this.camYaw + Math.PI) - t.state.yaw);
+    t.state.turretYaw = dampAngle(t.state.turretYaw, desiredTurretYaw, 14, dt);
+    t.rig.turret.rotation.y = t.state.turretYaw;
+
+    const desiredPitch = clamp(-this.camPitch * 0.85 + 0.05, -0.09, 0.44);
+    t.state.cannonPitch += (desiredPitch - t.state.cannonPitch) * Math.min(1, 16 * dt);
+    t.rig.cannonBarrel.rotation.x = t.state.cannonPitch;
+
+    t.rig.root.position.set(t.state.x, t.state.y, t.state.z);
+    t.rig.root.rotation.y = t.state.yaw;
+
+    this.player.x = t.state.x;
+    this.player.y = t.state.y;
+    this.player.z = t.state.z;
+    this.player.facingYaw = t.state.yaw;
+
+    if (Math.abs(t.state.speed) > 2.5) {
+      for (const e of this.enemies) {
+        if (e.aiState === 'ko') continue;
+        const d = Math.hypot(e.x - t.state.x, e.z - t.state.z);
+        if (d < 2.5) {
+          const dmg = Math.round(Math.abs(t.state.speed) * 12);
+          this.damageEnemy(e, dmg, true, fwdX, fwdZ, 0xe01f1f, 0.06);
+        }
+      }
+      for (const prop of this.destructibleProps) {
+        if (prop.spec.destroyed) continue;
+        const d = Math.hypot(prop.spec.x - t.state.x, prop.spec.z - t.state.z);
+        if (d < 2.6) {
+          this.damageDestructibleProp(prop, 100);
+        }
+      }
+    }
+
+    if (this.mouseLeftDown && t.state.cannonCooldown <= 0) {
+      this.fireTankCannon(t);
+    }
+
+    if (this.mouseRightDown && t.state.coaxialCooldown <= 0) {
+      this.fireTankCoaxial(t);
+    }
+  }
+
+  private fireTankCannon(t: ActiveTank): void {
+    t.state.cannonCooldown = 2.4;
+    gameAudio.playTankCannon();
+    this.trauma = Math.min(1, this.trauma + 0.85);
+
+    t.rig.cannonBarrel.position.z = 1.05;
+    setTimeout(() => {
+      if (t.rig.cannonBarrel) t.rig.cannonBarrel.position.z = 1.35;
+    }, 180);
+
+    _v1.set(0, 0, 0);
+    t.rig.cannonMuzzle.getWorldPosition(_v1);
+
+    _raycaster.setFromCamera(_ndcCenter, this.camera);
+    const target = _raycaster.ray.origin.clone().addScaledVector(_raycaster.ray.direction, 80);
+    const dir = new THREE.Vector3().subVectors(target, _v1).normalize();
+
+    this.spawnParticles(_v1.x, _v1.y, _v1.z, 28, [0xffffff, 0xffd27a, 0xff7e26], 4.5, 12.0, 0.18, 0.35, 18, 0.45);
+    this.spawnSmoke(_v1.x, _v1.y, _v1.z, 14, 0.35, 1.4);
+    this.spawnShockwaveRing(_v1.x, _v1.y, _v1.z, 6.0, 0.4);
+
+    this.spawnProjectile(
+      true,
+      _v1.x,
+      _v1.y,
+      _v1.z,
+      dir.x * 65.0,
+      dir.y * 65.0,
+      dir.z * 65.0,
+      280,
+      false,
+      0xffa834,
+      0.08,
+    );
+  }
+
+  private fireTankCoaxial(t: ActiveTank): void {
+    t.state.coaxialCooldown = 0.1;
+    gameAudio.playShoot('pulse');
+
+    _v1.set(0, 0, 0);
+    t.rig.coaxialMuzzle.getWorldPosition(_v1);
+
+    _raycaster.setFromCamera(_ndcCenter, this.camera);
+    const target = _raycaster.ray.origin.clone().addScaledVector(_raycaster.ray.direction, 60);
+    const dir = new THREE.Vector3().subVectors(target, _v1).normalize();
+
+    this.spawnParticles(_v1.x, _v1.y, _v1.z, 4, [0xfff3c4, 0xffd27a], 2.0, 4.0, 0.08, 0.14, 12, 0.2);
+    this.spawnProjectile(
+      true,
+      _v1.x,
+      _v1.y,
+      _v1.z,
+      dir.x * 55.0,
+      dir.y * 55.0,
+      dir.z * 55.0,
+      24,
+      false,
+      0xffe066,
+      0.02,
+    );
+  }
+
+  private damageTank(t: ActiveTank, damage: number, hitX?: number, hitZ?: number): void {
+    if (t.state.destroyed) return;
+    t.state.hp = Math.max(0, t.state.hp - damage);
+    this.spawnParticles(hitX ?? t.state.x, 1.0, hitZ ?? t.state.z, 10, [0xffd27a, 0x64707a], 2.0, 5.0, 0.08, 0.16, 14, 0.35);
+
+    if (t.state.hp <= 0) {
+      this.destroyTank(t);
+    }
+  }
+
+  private destroyTank(t: ActiveTank): void {
+    t.state.destroyed = true;
+    t.state.respawnTimer = 0;
+    t.state.speed = 0;
+    t.rig.wreckOverlay.visible = true;
+
+    this.triggerExplosion(t.state.x, t.state.y + 1.2, t.state.z, 9.5, 220);
+    this.trauma = 1.0;
+
+    if (this.activeTank === t) {
+      this.tryToggleVehicle();
+      this.damagePlayer(80, 0, 0);
+    }
+  }
+
+  private fireRpgRocket(muzzlePos: THREE.Vector3, aimPoint: THREE.Vector3): void {
+    const dir = new THREE.Vector3().subVectors(aimPoint, muzzlePos).normalize();
+    const mesh = buildRpgRocketMesh(this.materials);
+    mesh.position.copy(muzzlePos);
+    mesh.lookAt(aimPoint);
+    this.scene.add(mesh);
+
+    this.activeRockets.push({
+      id: `rpg-${Date.now()}-${Math.random()}`,
+      x: muzzlePos.x,
+      y: muzzlePos.y,
+      z: muzzlePos.z,
+      vx: dir.x * 42.0,
+      vy: dir.y * 42.0,
+      vz: dir.z * 42.0,
+      mesh,
+      life: 3.5,
+      smokeTimer: 0,
+    });
+  }
+
+  private updateRockets(dt: number): void {
+    for (let i = this.activeRockets.length - 1; i >= 0; i--) {
+      const r = this.activeRockets[i];
+      r.life -= dt;
+      if (r.life <= 0) {
+        this.scene.remove(r.mesh);
+        this.activeRockets.splice(i, 1);
+        continue;
+      }
+
+      r.x += r.vx * dt;
+      r.y += r.vy * dt;
+      r.z += r.vz * dt;
+      r.mesh.position.set(r.x, r.y, r.z);
+
+      r.smokeTimer += dt;
+      if (r.smokeTimer > 0.028) {
+        r.smokeTimer = 0;
+        this.spawnSmoke(r.x, r.y, r.z, 2, 0.18, 0.55);
+      }
+
+      let impacted = false;
+      if (r.y <= 0.1 || Math.abs(r.x) > ARENA_HALF_EXTENT + 5 || Math.abs(r.z) > ARENA_HALF_EXTENT + 5) {
+        impacted = true;
+      }
+
+      if (!impacted) {
+        for (let c = 0; c < this.world.colliders.length; c++) {
+          const box = this.world.colliders[c];
+          if (!box.blocksBullets) continue;
+          if (pointHitsBox(r.x, r.y, r.z, box, 0.2)) {
+            impacted = true;
+            break;
+          }
+        }
+      }
+
+      if (!impacted) {
+        for (const e of this.enemies) {
+          if (e.aiState === 'ko') continue;
+          const d = Math.hypot(e.x - r.x, e.z - r.z);
+          if (d < e.radius + 0.45 && r.y >= e.y && r.y <= e.y + e.height) {
+            impacted = true;
+            break;
+          }
+        }
+      }
+
+      if (!impacted) {
+        for (const v of this.vehicles) {
+          if (v.state.destroyed) continue;
+          if (Math.hypot(v.state.x - r.x, v.state.z - r.z) < v.state.radius + 0.2) {
+            impacted = true;
+            break;
+          }
+        }
+      }
+
+      if (impacted) {
+        this.triggerExplosion(r.x, Math.max(0.2, r.y), r.z, 6.8, 220);
+        this.scene.remove(r.mesh);
+        this.activeRockets.splice(i, 1);
+      }
+    }
+  }
+
+  private performKatanaSlash(): void {
+    gameAudio.playKatanaSlash();
+    this.trauma = Math.min(1, this.trauma + 0.32);
+
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    this.player.x += fwdX * 2.2;
+    this.player.z += fwdZ * 2.2;
+    this.player.facingYaw = this.camYaw + Math.PI;
+
+    this.spawnParticles(
+      this.player.x + fwdX * 1.5,
+      this.player.y + 1.2,
+      this.player.z + fwdZ * 1.5,
+      18,
+      [0xec4899, 0xf43f5e, 0xffffff],
+      3.2,
+      7.5,
+      0.08,
+      0.18,
+      12,
+      0.35,
+    );
+    this.spawnShockwaveRing(this.player.x + fwdX * 1.4, this.player.y + 1.0, this.player.z + fwdZ * 1.4, 3.8, 0.25);
+
+    for (const e of this.enemies) {
+      if (e.aiState === 'ko') continue;
+      const dx = e.x - this.player.x;
+      const dz = e.z - this.player.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 3.8) {
+        const dot = (dx * fwdX + dz * fwdZ) / dist;
+        if (dot > 0.15) {
+          this.hitmarkerTimer = 0.18;
+          this.hitmarkerCrit = true;
+          this.damageEnemy(e, 140, true, fwdX, fwdZ, 0xec4899, 0.08);
+          gameAudio.playFleshHit();
+          this.spawnDirectionalBlood(e.x, e.y + 1.1, e.z, fwdX, fwdZ, 22, true);
+          this.spawnBloodPuddle(e.x, e.y, e.z, 1.35);
+        }
+      }
+    }
+
+    for (const prop of this.destructibleProps) {
+      if (prop.spec.destroyed) continue;
+      const d = Math.hypot(prop.spec.x - this.player.x, prop.spec.z - this.player.z);
+      if (d < 3.4) {
+        this.damageDestructibleProp(prop, 120);
+      }
+    }
+  }
+
+  private throwC4(): void {
+    if (this.c4Count <= 0) return;
+    this.c4Count--;
+    gameAudio.playGrenadePin();
+    this.forceHudEmit = true;
+
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+    const mesh = buildC4Mesh(this.materials);
+    mesh.position.set(this.player.x + fwdX * 0.8, this.player.y + 1.4, this.player.z + fwdZ * 0.8);
+    this.scene.add(mesh);
+
+    this.c4Entities.push({
+      id: `c4-${Date.now()}-${Math.random()}`,
+      x: this.player.x + fwdX * 0.8,
+      y: this.player.y + 1.4,
+      z: this.player.z + fwdZ * 0.8,
+      vx: fwdX * 14.0,
+      vy: 4.5,
+      vz: fwdZ * 14.0,
+      stuck: false,
+      mesh,
+      beepTimer: 0,
+    });
+  }
+
+  private detonateC4(): void {
+    if (this.c4Entities.length === 0) return;
+    gameAudio.playC4Detonator();
+
+    for (const c4 of this.c4Entities) {
+      this.triggerExplosion(c4.x, Math.max(0.2, c4.y), c4.z, 8.5, 300);
+      this.scene.remove(c4.mesh);
+    }
+    this.c4Entities = [];
+    this.forceHudEmit = true;
+  }
+
+  private updateC4(dt: number): void {
+    for (const c4 of this.c4Entities) {
+      if (!c4.stuck) {
+        c4.vy -= 18.0 * dt;
+        c4.x += c4.vx * dt;
+        c4.y += c4.vy * dt;
+        c4.z += c4.vz * dt;
+        if (c4.y <= 0.08) {
+          c4.y = 0.08;
+          c4.stuck = true;
+          c4.vx = 0;
+          c4.vy = 0;
+          c4.vz = 0;
+        }
+        c4.mesh.position.set(c4.x, c4.y, c4.z);
+      }
+      c4.beepTimer += dt;
+    }
+  }
+
+  private deploySentry(): void {
+    if (this.sentriesAvailable <= 0) return;
+    this.sentriesAvailable--;
+    gameAudio.playPickup();
+    this.forceHudEmit = true;
+
+    const rig = buildSentryRig(this.materials);
+    rig.root.position.set(this.player.x, 0.03, this.player.z);
+    rig.root.rotation.y = this.player.facingYaw;
+    this.scene.add(rig.root);
+
+    const state: SentryEntityState = {
+      id: `sentry-${Date.now()}`,
+      x: this.player.x,
+      y: 0.03,
+      z: this.player.z,
+      yaw: this.player.facingYaw,
+      hp: 180,
+      maxHp: 180,
+      fireCooldown: 0,
+      targetEnemyId: null,
+      scanPhase: 0,
+    };
+
+    this.sentries.push({
+      state,
+      rig,
+      damageSmokeAccum: 0,
+    });
+  }
+
+  private updateSentries(dt: number): void {
+    for (let i = this.sentries.length - 1; i >= 0; i--) {
+      const s = this.sentries[i];
+      if (s.state.hp <= 0) {
+        this.triggerExplosion(s.state.x, 0.6, s.state.z, 4.0, 100);
+        this.scene.remove(s.rig.root);
+        this.sentries.splice(i, 1);
+        continue;
+      }
+
+      if (s.state.fireCooldown > 0) s.state.fireCooldown -= dt;
+
+      let target: ActiveEnemy | null = null;
+      let targetDist = 24.0;
+      for (const e of this.enemies) {
+        if (e.aiState === 'ko') continue;
+        const d = Math.hypot(e.x - s.state.x, e.z - s.state.z);
+        if (d < targetDist) {
+          targetDist = d;
+          target = e;
+        }
+      }
+
+      if (target) {
+        const dx = target.x - s.state.x;
+        const dz = target.z - s.state.z;
+        const targetYaw = Math.atan2(dx, dz);
+        s.state.yaw = dampAngle(s.state.yaw, targetYaw, 12, dt);
+        s.rig.turretHead.rotation.y = s.state.yaw;
+
+        if (s.state.fireCooldown <= 0) {
+          s.state.fireCooldown = 0.12;
+          gameAudio.playShoot('pulse');
+          this.spawnParticles(s.state.x, 0.8, s.state.z, 4, [0xef4444, 0xffd27a], 2.0, 4.0, 0.06, 0.12, 12, 0.2);
+          this.damageEnemy(target, 18, false, dx / targetDist, dz / targetDist, 0xef4444, 0.02);
+        }
+      } else {
+        s.state.scanPhase += dt * 1.8;
+        s.rig.turretHead.rotation.y = Math.sin(s.state.scanPhase) * 0.75;
+      }
+    }
+  }
+
+  private damageDestructibleProp(prop: DestructiblePropInstance, damage: number): void {
+    if (prop.spec.destroyed) return;
+    prop.spec.hp -= damage;
+    if (prop.spec.hp <= 0) {
+      prop.spec.destroyed = true;
+      prop.mesh.visible = false;
+      const idx = this.world.colliders.indexOf(prop.collider);
+      if (idx !== -1) {
+        this.world.colliders.splice(idx, 1);
+      }
+      const debrisColors =
+        prop.spec.kind === 'lantern'
+          ? [0x6b7280, 0x9ca3af, 0xffe488]
+          : prop.spec.kind === 'canopy'
+            ? [0xef4444, 0xffffff, 0x785338]
+            : [0x5a3d28, 0x785338, 0x85542f];
+      this.spawnParticles(
+        prop.spec.x,
+        prop.spec.y + 0.6,
+        prop.spec.z,
+        14,
+        debrisColors,
+        2.5,
+        6.5,
+        0.12,
+        0.24,
+        16,
+        0.5,
+      );
+      gameAudio.playHit(false, false);
+    }
+  }
+
+  private updateTrain(dt: number): void {
+    if (!this.trainCar) return;
+    const t = this.trainCar;
+    t.z += t.speed * t.dir * dt;
+    if (t.z > 120) {
+      t.dir = -1;
+      t.mesh.rotation.y = Math.PI;
+    } else if (t.z < -120) {
+      t.dir = 1;
+      t.mesh.rotation.y = 0;
+    }
+    t.mesh.position.set(t.x, t.y, t.z);
+
+    if (
+      !this.activeVehicle &&
+      !this.activeHelicopter &&
+      !this.activeTank &&
+      Math.abs(this.player.x - t.x) < 1.6 &&
+      Math.abs(this.player.z - t.z) < 7.2 &&
+      this.player.y >= 2.5
+    ) {
+      this.player.z += t.speed * t.dir * dt;
+    }
+  }
+
+  private checkWorldInteractions(): void {
+    if (this.activeVehicle || this.activeHelicopter || this.activeTank) {
+      this.interactionPrompt = null;
+      return;
+    }
+
+    const ramenDist = Math.hypot(this.player.x - (-12.0), this.player.z - (-8.0));
+    if (ramenDist < 3.8) {
+      this.interactionPrompt = 'Press [F] or Tap to Eat Ramen (50 Pts) - Full HP + 50 Overhealth';
+      if (this.interactJustPressed) {
+        this.interactJustPressed = false;
+        if (this.score >= 50) {
+          this.score -= 50;
+          this.playerHp = PLAYER_MAX_HP;
+          this.overhealth = Math.min(100, this.overhealth + 50);
+          gameAudio.playWaveClear();
+          this.spawnParticles(this.player.x, this.player.y + 1, this.player.z, 16, [0x4ade80, 0x22c55e, 0xffffff], 2.0, 4.5, 0.08, 0.16, 8, 0.35);
+          this.forceHudEmit = true;
+        }
+      }
+      return;
+    }
+
+    const vendingDist = Math.hypot(this.player.x - 6.0, this.player.z - 14.0);
+    if (vendingDist < 3.8) {
+      this.interactionPrompt = 'Press [F] or Tap Vending Machine (30 Pts) - Speed Soda & Ammo Refill';
+      if (this.interactJustPressed) {
+        this.interactJustPressed = false;
+        if (this.score >= 30) {
+          this.score -= 30;
+          this.speedBoostTimer = 22.0;
+          for (const wid of WEAPON_ORDER) {
+            this.weapon.ammo[wid] = getEffectiveMagSize(wid, this.loadoutMods.magMult);
+          }
+          gameAudio.playVendingBuy();
+          this.spawnParticles(this.player.x, this.player.y + 1, this.player.z, 16, [0x38bdf8, 0x0ea5e9, 0xffffff], 2.0, 4.5, 0.08, 0.16, 8, 0.35);
+          this.forceHudEmit = true;
+        }
+      }
+      return;
+    }
+
+    this.interactionPrompt = null;
+    this.interactJustPressed = false;
+  }
+
   private throwGrenade(
     type: GrenadeType,
     remoteVel?: [number, number, number],
@@ -3904,7 +4848,18 @@ export class VoxelGameEngine {
       this.camYaw -= 2.1 * dt;
     }
 
-    if (this.activeHelicopter) {
+    if (this.activeTank) {
+      // Tank warfare mode: heavy 120mm cannon, coaxial MG & caterpillar treads
+      this.jumpJustPressed = false;
+      this.dashJustPressed = false;
+      this.reloadJustPressed = false;
+      this.pendingWeaponSwitch = undefined;
+      this.updateActiveTank(dt);
+      this.updateParkedVehicles(dt);
+      this.updateHelicopters(dt);
+      this.updateTanks(dt);
+      this.updateCameraRig(dt);
+    } else if (this.activeHelicopter) {
       // Flight mode: 3D flight avionics, minigun, bombs & rotor kinematics
       this.jumpJustPressed = false;
       this.dashJustPressed = false;
@@ -3913,6 +4868,7 @@ export class VoxelGameEngine {
       this.updateActiveHelicopter(dt);
       this.updateParkedVehicles(dt);
       this.updateHelicopters(dt);
+      this.updateTanks(dt);
       this.updateCameraRig(dt);
     } else if (this.activeVehicle) {
       // Driving mode: vehicle controls, car-vs-car crashing & zombie roadkill physics
@@ -3923,6 +4879,7 @@ export class VoxelGameEngine {
       this.updateActiveVehicle(dt);
       this.updateParkedVehicles(dt);
       this.updateHelicopters(dt);
+      this.updateTanks(dt);
       this.updateVehicleCollisions();
       this.updateCameraRig(dt);
     } else {
@@ -3937,14 +4894,42 @@ export class VoxelGameEngine {
         this.grenadeJustPressed = false;
         this.throwGrenade(this.playerGrenades.active);
       }
+      if (this.c4JustPressed) {
+        this.c4JustPressed = false;
+        if (this.c4Entities.length > 0) {
+          this.detonateC4();
+        } else {
+          this.throwC4();
+        }
+      }
+      if (this.sentryJustPressed) {
+        this.sentryJustPressed = false;
+        this.deploySentry();
+      }
+      this.checkWorldInteractions();
       this.updateHelicopters(dt);
+      this.updateTanks(dt);
+
+      if (this.touchLookDx !== 0 || this.touchLookDy !== 0) {
+        this.camYaw = normalizeAngle(this.camYaw - this.touchLookDx * 0.005);
+        this.camPitch = clamp(this.camPitch - this.touchLookDy * 0.005, -0.65, 0.72);
+        this.touchLookDx = 0;
+        this.touchLookDy = 0;
+      }
+
+      if (this.speedBoostTimer > 0) {
+        this.speedBoostTimer -= dt;
+      }
+
       // On-foot kinematics, strict wall & parked-car collisions, animations, and tactical shooting
       const forward =
         (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp') ? 1 : 0) -
-        (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown') ? 1 : 0);
+        (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown') ? 1 : 0) +
+        this.touchMoveY;
       const right =
         (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight') ? 1 : 0) -
-        (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft') ? 1 : 0);
+        (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft') ? 1 : 0) +
+        this.touchMoveX;
 
       const aimingOrShooting = this.mouseRightDown || this.mouseLeftDown || this.recoilVisual > 0.05;
       const moveRes = stepPlayerKinematics(
@@ -4106,8 +5091,12 @@ export class VoxelGameEngine {
 
     // 6. Projectiles, Ordnance, Pickups, Particles
     this.updateProjectiles(dt);
+    this.updateRockets(dt);
     this.updateGrenades(dt);
     this.updateBombs(dt);
+    this.updateC4(dt);
+    this.updateSentries(dt);
+    this.updateTrain(dt);
     this.updateShockwaves(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
@@ -4229,24 +5218,29 @@ export class VoxelGameEngine {
   private updateCameraRig(dt: number): void {
     const isFlying = this.activeHelicopter !== null;
     const isDriving = !isFlying && this.activeVehicle !== null;
-    const isAiming = !isDriving && !isFlying && this.mouseRightDown;
-    const isDashing = !isDriving && !isFlying && this.player.dashTimer > 0;
+    const isTank = !isFlying && !isDriving && this.activeTank !== null;
+    const isAiming = !isDriving && !isFlying && !isTank && this.mouseRightDown;
+    const isDashing = !isDriving && !isFlying && !isTank && this.player.dashTimer > 0;
 
     // Dynamic FOV (tightens on ADS zoom, widens smoothly with vehicle speed & nitro!)
     const speedNorm = isDriving
       ? clamp(Math.abs(this.activeVehicle!.state.speed) / 28, 0, 1)
       : isFlying
         ? clamp(Math.hypot(this.activeHelicopter!.state.vx, this.activeHelicopter!.state.vz) / 18, 0, 1)
-        : 0;
+        : isTank
+          ? clamp(Math.abs(this.activeTank!.state.speed) / 12, 0, 1)
+          : 0;
     const targetFov = isFlying
       ? 64 + speedNorm * 8
       : isDriving
         ? 60 + speedNorm * 10 + (this.activeVehicle!.state.boosting ? 5 : 0)
-        : isAiming
-          ? 44
-          : isDashing
-            ? 64
-            : 56;
+        : isTank
+          ? 58 + speedNorm * 6
+          : isAiming
+            ? 44
+            : isDashing
+              ? 64
+              : 56;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
       this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-10 * dt));
       this.camera.updateProjectionMatrix();
@@ -4254,7 +5248,7 @@ export class VoxelGameEngine {
 
     // Over-the-shoulder, vehicle chase, or helicopter aerial combat pivot
     const pivotX = this.player.x;
-    const pivotY = this.player.y + (isFlying ? 2.2 : isDriving ? 1.85 : 1.52);
+    const pivotY = this.player.y + (isFlying ? 2.2 : isDriving ? 1.85 : isTank ? 2.1 : 1.52);
     const pivotZ = this.player.z;
 
     const fwdX = -Math.sin(this.camYaw);
@@ -4266,13 +5260,15 @@ export class VoxelGameEngine {
       ? 12.0 + speedNorm * 2.5
       : isDriving
         ? 8.6 + speedNorm * 1.4
-        : isAiming
-          ? 3.35
-          : 5.95;
-    const shoulder = isFlying || isDriving ? 0 : isAiming ? 0.86 : 0.72;
-    const pitch = isFlying ? Math.max(0.14, this.camPitch) : isDriving ? 0.24 : this.camPitch;
+        : isTank
+          ? 10.2 + speedNorm * 1.2
+          : isAiming
+            ? 3.35
+            : 5.95;
+    const shoulder = isFlying || isDriving || isTank ? 0 : isAiming ? 0.86 : 0.72;
+    const pitch = isFlying ? Math.max(0.14, this.camPitch) : isDriving || isTank ? 0.22 : this.camPitch;
     const horizDist = Math.cos(pitch) * dist;
-    const vertOffset = Math.sin(pitch) * dist + (isFlying ? 3.0 : isDriving ? 1.35 : 0.45);
+    const vertOffset = Math.sin(pitch) * dist + (isFlying ? 3.0 : isDriving || isTank ? 1.5 : 0.45);
 
     _camGoal.set(
       pivotX - fwdX * horizDist + rightX * shoulder,
@@ -4318,6 +5314,26 @@ export class VoxelGameEngine {
   }
 
   private firePlayerWeapon(): void {
+    if (this.weapon.active === 'katana') {
+      this.performKatanaSlash();
+      return;
+    }
+
+    if (this.weapon.active === 'rpg') {
+      gameAudio.playRpgLaunch();
+      this.recoilVisual = Math.min(1, this.recoilVisual + 0.65);
+      this.crosshairSpread = Math.min(1, this.crosshairSpread + 0.7);
+      this.trauma = Math.min(1, this.trauma + 0.45);
+      this.player.facingYaw = this.camYaw + Math.PI;
+      this.hero.root.rotation.y = this.player.facingYaw;
+      this.hero.root.updateMatrixWorld(true);
+      _raycaster.setFromCamera(_ndcCenter, this.camera);
+      _aimPoint.copy(_raycaster.ray.origin).addScaledVector(_raycaster.ray.direction, 64);
+      this.hero.muzzlePoint.getWorldPosition(_muzzlePos);
+      this.fireRpgRocket(_muzzlePos, _aimPoint);
+      return;
+    }
+
     const spec = WEAPONS[this.weapon.active];
     const mods = this.loadoutMods;
     gameAudio.playShoot(spec.id);
@@ -5558,6 +6574,8 @@ export class VoxelGameEngine {
         pulse: getEffectiveMagSize('pulse', this.loadoutMods.magMult),
         scatter: getEffectiveMagSize('scatter', this.loadoutMods.magMult),
         rail: getEffectiveMagSize('rail', this.loadoutMods.magMult),
+        rpg: getEffectiveMagSize('rpg', this.loadoutMods.magMult),
+        katana: 999,
       },
       reloading: this.weapon.reloading,
       reloadProgress: this.weapon.reloading
@@ -5599,9 +6617,23 @@ export class VoxelGameEngine {
       helicopterHp: this.activeHelicopter ? Math.round(this.activeHelicopter.state.hp) : 250,
       helicopterMaxHp: this.activeHelicopter ? this.activeHelicopter.state.maxHp : 250,
       nearbyHelicopterName:
-        !this.activeHelicopter && !this.activeVehicle && this.nearbyHelicopter
+        !this.activeHelicopter && !this.activeVehicle && !this.activeTank && this.nearbyHelicopter
           ? this.nearbyHelicopter.state.name
           : null,
+      inTank: this.activeTank !== null,
+      tankName: this.activeTank ? this.activeTank.state.name : '',
+      tankHp: this.activeTank ? Math.round(this.activeTank.state.hp) : 500,
+      tankMaxHp: this.activeTank ? this.activeTank.state.maxHp : 500,
+      tankCannonReady: this.activeTank ? this.activeTank.state.cannonCooldown <= 0 : true,
+      nearbyTankName:
+        !this.activeTank && !this.activeVehicle && !this.activeHelicopter && this.nearbyTank
+          ? this.nearbyTank.state.name
+          : null,
+      c4Count: this.c4Count,
+      sentriesAvailable: this.sentriesAvailable,
+      katanaReady: true,
+      overhealth: Math.round(this.overhealth),
+      interactionPrompt: this.interactionPrompt,
       minimapPlayer: {
         x: this.player.x,
         z: this.player.z,
@@ -5609,7 +6641,9 @@ export class VoxelGameEngine {
           ? normalizeAngle(this.activeHelicopter.state.yaw + Math.PI)
           : this.activeVehicle
             ? normalizeAngle(this.activeVehicle.state.yaw + Math.PI)
-            : this.camYaw,
+            : this.activeTank
+              ? normalizeAngle(this.activeTank.state.yaw + Math.PI)
+              : this.camYaw,
       },
       minimapEnemies: activeAlive.map((e) => ({
         x: e.x,
@@ -5627,6 +6661,11 @@ export class VoxelGameEngine {
           z: h.state.z,
           active: h === this.activeHelicopter,
         })),
+        ...this.tanks.map((t) => ({
+          x: t.state.x,
+          z: t.state.z,
+          active: t === this.activeTank,
+        })),
       ],
       tdmScores: this.gameMode === 'deathmatch' ? multiplayer.scores : undefined,
       tdmTeam: this.gameMode === 'deathmatch' ? multiplayer.localTeam : undefined,
@@ -5639,6 +6678,52 @@ export class VoxelGameEngine {
     this.callbacks.onHudUpdate(snapshot);
   }
 
+  public triggerFire(down: boolean): void {
+    this.mouseLeftDown = down;
+  }
+
+  public toggleAim(): void {
+    this.mouseRightDown = !this.mouseRightDown;
+  }
+
+  public triggerJump(): void {
+    this.jumpJustPressed = true;
+  }
+
+  public triggerDash(): void {
+    this.dashJustPressed = true;
+  }
+
+  public triggerReload(): void {
+    this.reloadJustPressed = true;
+  }
+
+  public triggerVehicleToggle(): void {
+    this.vehicleEnterJustPressed = true;
+  }
+
+  public triggerC4(): void {
+    this.c4JustPressed = true;
+  }
+
+  public triggerSentry(): void {
+    this.sentryJustPressed = true;
+  }
+
+  public triggerInteract(): void {
+    this.interactJustPressed = true;
+  }
+
+  public applyTouchMovement(x: number, y: number): void {
+    this.touchMoveX = x;
+    this.touchMoveY = y;
+  }
+
+  public applyTouchLook(dx: number, dy: number): void {
+    this.touchLookDx += dx;
+    this.touchLookDy += dy;
+  }
+
   public dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.frameId);
@@ -5649,6 +6734,25 @@ export class VoxelGameEngine {
       this.scene.remove(rp.rig.root);
     }
     this.remotePlayers.clear();
+
+    for (const t of this.tanks) {
+      this.scene.remove(t.rig.root);
+    }
+    for (const s of this.sentries) {
+      this.scene.remove(s.rig.root);
+    }
+    for (const c of this.c4Entities) {
+      this.scene.remove(c.mesh);
+    }
+    for (const r of this.activeRockets) {
+      this.scene.remove(r.mesh);
+    }
+    for (const p of this.destructibleProps) {
+      this.scene.remove(p.mesh);
+    }
+    if (this.trainCar) {
+      this.scene.remove(this.trainCar.mesh);
+    }
 
     for (const h of this.helicopters) {
       this.scene.remove(h.rig.root);

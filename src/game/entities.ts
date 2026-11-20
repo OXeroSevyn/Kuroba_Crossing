@@ -439,6 +439,20 @@ function buildDetailedWeapons(
       muzzleOffsetZ: railMuzzleZ,
       ejectOffset: new THREE.Vector3(-0.12, -0.06, 0.46),
     },
+    rpg: {
+      root: buildRpgMesh(materials),
+      magazine: new THREE.Group(),
+      boltOrPump: new THREE.Group(),
+      muzzleOffsetZ: 0.95,
+      ejectOffset: new THREE.Vector3(0, 0, 0),
+    },
+    katana: {
+      root: buildKatanaMesh(materials),
+      magazine: new THREE.Group(),
+      boltOrPump: new THREE.Group(),
+      muzzleOffsetZ: 0.75,
+      ejectOffset: new THREE.Vector3(0, 0, 0),
+    },
   };
 }
 
@@ -699,7 +713,15 @@ export function buildHeroRig(
   weaponRigs.pulse.root.scale.setScalar(1.12);
   weaponRigs.scatter.root.scale.setScalar(1.12);
   weaponRigs.rail.root.scale.setScalar(1.12);
-  rightArm.add(weaponRigs.pulse.root, weaponRigs.scatter.root, weaponRigs.rail.root);
+  weaponRigs.rpg.root.scale.setScalar(1.12);
+  weaponRigs.katana.root.scale.setScalar(1.12);
+  rightArm.add(
+    weaponRigs.pulse.root,
+    weaponRigs.scatter.root,
+    weaponRigs.rail.root,
+    weaponRigs.rpg.root,
+    weaponRigs.katana.root,
+  );
 
   const muzzlePoint = new THREE.Object3D();
   muzzlePoint.position.set(0, -0.09, weaponRigs.pulse.muzzleOffsetZ * 1.12);
@@ -1804,4 +1826,331 @@ export function buildShockwaveRingMesh(): THREE.Mesh {
     side: THREE.DoubleSide,
   });
   return new THREE.Mesh(ringGeo, ringMat);
+}
+
+export interface DrivableTankRig {
+  root: THREE.Group;
+  hull: THREE.Group;
+  turret: THREE.Group;
+  cannonBarrel: THREE.Group;
+  cannonMuzzle: THREE.Object3D;
+  coaxialMuzzle: THREE.Object3D;
+  driverSeat: THREE.Group;
+  leftTreads: THREE.Mesh[];
+  rightTreads: THREE.Mesh[];
+  headlightCones: THREE.Group;
+  wreckOverlay: THREE.Group;
+  damageSmokePoint: THREE.Object3D;
+}
+
+/**
+ * Builds the heavy Type-90 Voxel Main Battle Tank rig.
+ * Features heavy composite armor hull, track skirts, 360° rotating turret,
+ * recoil-absorbing 120mm smoothbore cannon, and coaxial machine gun.
+ */
+export function buildDrivableTankRig(materials: SharedVoxelMaterials): DrivableTankRig {
+  const root = new THREE.Group();
+  const hull = new THREE.Group();
+  root.add(hull);
+
+  const TANK_GREEN = 0x3d4838;
+  const TANK_DARK = 0x242e20;
+  const TREAD_COLOR = 0x181a1c;
+  const METAL_GRAY = 0x64707a;
+
+  const hullAsm = new VoxelAssembler();
+  // Lower hull & chassis floor
+  hullAsm.boxBottom(0, 0.25, 0, 2.3, 0.45, 4.4, TANK_DARK, 'metal');
+  // Upper sloped glacis plate
+  hullAsm.boxBottom(0, 0.65, 0.35, 2.4, 0.45, 3.2, TANK_GREEN);
+  // Engine deck & exhaust louvers
+  hullAsm.boxBottom(0, 0.72, -1.35, 2.2, 0.35, 1.8, TANK_DARK, 'metal');
+  // Front sloped armor wedge
+  hullAsm.boxBottom(0, 0.45, 1.95, 2.2, 0.42, 0.8, TANK_GREEN);
+  // Heavy side armor skirts protecting treads
+  hullAsm.boxBottom(-1.22, 0.28, 0, 0.16, 0.62, 4.5, TANK_DARK);
+  hullAsm.boxBottom(1.22, 0.28, 0, 0.16, 0.62, 4.5, TANK_DARK);
+  // Headlight housings
+  hullAsm.boxBottom(-0.95, 0.85, 2.1, 0.24, 0.2, 0.16, 0xfff3c4, 'emissive');
+  hullAsm.boxBottom(0.95, 0.85, 2.1, 0.24, 0.2, 0.16, 0xfff3c4, 'emissive');
+  hull.add(hullAsm.build(materials));
+
+  // Caterpillar road wheels
+  const leftTreads: THREE.Mesh[] = [];
+  const rightTreads: THREE.Mesh[] = [];
+  const wheelGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.24, 12);
+  wheelGeo.rotateZ(Math.PI * 0.5);
+  const wheelMat = new THREE.MeshLambertMaterial({ color: TREAD_COLOR });
+
+  for (let z = -1.8; z <= 1.8; z += 0.72) {
+    const lw = new THREE.Mesh(wheelGeo, wheelMat);
+    lw.position.set(-1.18, 0.28, z);
+    hull.add(lw);
+    leftTreads.push(lw);
+
+    const rw = new THREE.Mesh(wheelGeo, wheelMat);
+    rw.position.set(1.18, 0.28, z);
+    hull.add(rw);
+    rightTreads.push(rw);
+  }
+
+  // Turret Assembly (Rotates 360° independently)
+  const turret = new THREE.Group();
+  turret.position.set(0, 1.05, 0.15);
+  root.add(turret);
+
+  const turretAsm = new VoxelAssembler();
+  // Main angular turret bustle
+  turretAsm.boxBottom(0, 0, -0.15, 1.85, 0.58, 2.4, TANK_GREEN);
+  // Front wedge mantlet
+  turretAsm.boxBottom(0, 0.08, 0.95, 1.35, 0.48, 0.85, TANK_DARK, 'metal');
+  // Commander cupola & optic sight
+  turretAsm.boxBottom(-0.48, 0.58, -0.25, 0.52, 0.25, 0.52, TANK_DARK);
+  turretAsm.boxBottom(-0.48, 0.68, 0.02, 0.35, 0.12, 0.12, 0x38bdf8, 'emissive');
+  // Smoke grenade dischargers on turret flanks
+  turretAsm.boxBottom(-0.95, 0.35, 0.45, 0.18, 0.25, 0.32, METAL_GRAY, 'metal');
+  turretAsm.boxBottom(0.95, 0.35, 0.45, 0.18, 0.25, 0.32, METAL_GRAY, 'metal');
+  turret.add(turretAsm.build(materials));
+
+  // 120mm Cannon Barrel Group
+  const cannonBarrel = new THREE.Group();
+  cannonBarrel.position.set(0, 0.28, 1.35);
+  turret.add(cannonBarrel);
+
+  const barrelAsm = new VoxelAssembler();
+  // Main cannon tube (3.2m long)
+  barrelAsm.boxBottom(0, -0.14, 0, 0.24, 0.24, 3.2, METAL_GRAY, 'metal');
+  // Thermal sleeve bore evacuator
+  barrelAsm.boxBottom(0, -0.18, 1.45, 0.34, 0.34, 0.72, TANK_DARK, 'metal');
+  // Muzzle brake
+  barrelAsm.boxBottom(0, -0.16, 3.15, 0.32, 0.28, 0.32, 0x222428, 'metal');
+  cannonBarrel.add(barrelAsm.build(materials));
+
+  const cannonMuzzle = new THREE.Object3D();
+  cannonMuzzle.position.set(0, 0, 3.4);
+  cannonBarrel.add(cannonMuzzle);
+
+  const coaxialMuzzle = new THREE.Object3D();
+  coaxialMuzzle.position.set(0.32, 0.28, 1.35);
+  turret.add(coaxialMuzzle);
+
+  // Driver Seat inside tank
+  const driverSeat = new THREE.Group();
+  driverSeat.position.set(0, 0.85, 0.95);
+  const pilotAsm = new VoxelAssembler();
+  pilotAsm.boxBottom(0, 0, 0, 0.42, 0.35, 0.32, 0x2d3b2c);
+  pilotAsm.boxBottom(0, 0.35, 0, 0.38, 0.35, 0.36, 0x1a2418);
+  driverSeat.add(pilotAsm.build(materials));
+  driverSeat.visible = false;
+  hull.add(driverSeat);
+
+  // Headlight Cones
+  const headlightCones = new THREE.Group();
+  const coneGeo = new THREE.ConeGeometry(2.8, 18, 16, 1, true);
+  coneGeo.translate(0, -9, 0);
+  coneGeo.rotateX(-Math.PI * 0.5 + 0.08);
+  const coneMat = new THREE.MeshBasicMaterial({
+    color: 0xffefb8,
+    transparent: true,
+    opacity: 0.16,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const leftCone = new THREE.Mesh(coneGeo, coneMat);
+  leftCone.position.set(-0.95, 0.95, 2.15);
+  headlightCones.add(leftCone);
+  const rightCone = new THREE.Mesh(coneGeo, coneMat);
+  rightCone.position.set(0.95, 0.95, 2.15);
+  headlightCones.add(rightCone);
+  hull.add(headlightCones);
+
+  // Charred Wreck Overlay
+  const wreckOverlay = new THREE.Group();
+  const wreckAsm = new VoxelAssembler();
+  wreckAsm.boxBottom(0, 0.25, 0, 2.4, 0.9, 4.4, 0x141212);
+  wreckAsm.boxBottom(0, 1.05, 0.15, 1.9, 0.6, 2.4, 0x1f191b);
+  wreckAsm.boxBottom(0, 1.25, 1.2, 0.3, 0.3, 1.8, 0x100e10);
+  wreckOverlay.add(wreckAsm.build(materials));
+  wreckOverlay.visible = false;
+  root.add(wreckOverlay);
+
+  const damageSmokePoint = new THREE.Object3D();
+  damageSmokePoint.position.set(0, 1.45, -0.6);
+  root.add(damageSmokePoint);
+
+  root.add(createContactShadowMesh(3.2, materials.contactShadow));
+
+  return {
+    root,
+    hull,
+    turret,
+    cannonBarrel,
+    cannonMuzzle,
+    coaxialMuzzle,
+    driverSeat,
+    leftTreads,
+    rightTreads,
+    headlightCones,
+    wreckOverlay,
+    damageSmokePoint,
+  };
+}
+
+/**
+ * Builds the RPG-7 Anti-Armor Rocket Launcher model for player weapon rig.
+ */
+export function buildRpgMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Steel launch tube (olive drab & wood heat shield)
+  vb.boxBottom(0, 0, -0.4, 0.14, 0.14, 0.95, 0x3b4436, 'metal');
+  vb.boxBottom(0, -0.01, -0.15, 0.17, 0.17, 0.42, 0x6e3d22); // Wood grip sleeve
+  vb.boxBottom(0, 0.12, 0.05, 0.08, 0.18, 0.16, 0x222622, 'metal'); // PGO-7 Optical Scope
+  vb.boxBottom(0, -0.16, 0.18, 0.08, 0.22, 0.1, 0x1e241c); // Pistol grip & trigger
+  // Conical rocket warhead loaded in the muzzle
+  vb.boxBottom(0, -0.04, 0.58, 0.28, 0.28, 0.34, 0x2e3b2b);
+  vb.boxBottom(0, 0, 0.9, 0.14, 0.14, 0.22, 0x1e241c, 'metal'); // Fuse tip
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds the in-flight RPG Rocket projectile with stabilizing fins.
+ */
+export function buildRpgRocketMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  vb.boxBottom(0, 0, 0, 0.12, 0.12, 0.65, 0x485842, 'metal');
+  vb.boxBottom(0, -0.06, 0.45, 0.26, 0.26, 0.32, 0x364834);
+  vb.boxBottom(0, 0, 0.75, 0.1, 0.1, 0.18, 0x1c2218, 'metal');
+  // 4 Stabilizing folding fins
+  vb.boxBottom(0, 0.05, -0.28, 0.04, 0.35, 0.18, 0x242d22, 'metal');
+  vb.boxBottom(0, 0.05, -0.28, 0.35, 0.04, 0.18, 0x242d22, 'metal');
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds the Cyber Katana with glowing neon blade edge.
+ */
+export function buildKatanaMesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Tsuka handle with black ito wrap
+  vb.boxBottom(0, -0.02, -0.32, 0.08, 0.08, 0.32, 0x171717);
+  // Golden tsuba guard
+  vb.boxBottom(0, -0.03, 0.01, 0.24, 0.24, 0.04, 0xf59e0b, 'emissive');
+  // High-frequency carbon-steel katana blade with neon pink edge
+  vb.boxBottom(0, 0, 0.06, 0.05, 0.12, 0.85, 0xd4d4d8, 'metal');
+  vb.boxBottom(0, 0.08, 0.06, 0.02, 0.05, 0.86, 0xec4899, 'emissive');
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds the C4 Remote Explosive Block with blinking detonator LED.
+ */
+export function buildC4Mesh(materials: SharedVoxelMaterials): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+  // Plastic explosive clay block
+  vb.boxBottom(0, 0, 0, 0.26, 0.14, 0.38, 0x9ca3af);
+  // Green circuit board
+  vb.boxBottom(0, 0.14, 0.02, 0.18, 0.04, 0.22, 0x15803d);
+  // Blinking red status LED
+  vb.boxBottom(0.05, 0.18, 0.08, 0.05, 0.05, 0.05, 0xef4444, 'emissive');
+  group.add(vb.build(materials));
+  return group;
+}
+
+/**
+ * Builds the Automated Deployable Sentry Turret rig.
+ */
+export interface SentryRig {
+  root: THREE.Group;
+  turretHead: THREE.Group;
+  muzzleLeft: THREE.Object3D;
+  muzzleRight: THREE.Object3D;
+  scanLight: THREE.PointLight;
+}
+
+export function buildSentryRig(materials: SharedVoxelMaterials): SentryRig {
+  const root = new THREE.Group();
+  const baseAsm = new VoxelAssembler();
+  // Tripod legs & central base mount
+  baseAsm.boxBottom(0, 0, 0, 0.45, 0.35, 0.45, 0x27272a, 'metal');
+  baseAsm.boxBottom(-0.35, 0, -0.35, 0.15, 0.25, 0.15, 0x3f3f46, 'metal');
+  baseAsm.boxBottom(0.35, 0, -0.35, 0.15, 0.25, 0.15, 0x3f3f46, 'metal');
+  baseAsm.boxBottom(0, 0, 0.45, 0.15, 0.25, 0.15, 0x3f3f46, 'metal');
+  root.add(baseAsm.build(materials));
+
+  const turretHead = new THREE.Group();
+  turretHead.position.set(0, 0.42, 0);
+  root.add(turretHead);
+
+  const headAsm = new VoxelAssembler();
+  // Armored servo head housing
+  headAsm.boxBottom(0, 0, 0, 0.38, 0.32, 0.48, 0x3b82f6);
+  // Twin 7.62mm vulcan barrels
+  headAsm.boxBottom(-0.12, 0.08, 0.24, 0.08, 0.08, 0.55, 0x18181b, 'metal');
+  headAsm.boxBottom(0.12, 0.08, 0.24, 0.08, 0.08, 0.55, 0x18181b, 'metal');
+  // Red targeting sensor visor
+  headAsm.boxBottom(0, 0.22, 0.18, 0.24, 0.08, 0.06, 0xef4444, 'emissive');
+  turretHead.add(headAsm.build(materials));
+
+  const muzzleLeft = new THREE.Object3D();
+  muzzleLeft.position.set(-0.12, 0.12, 0.78);
+  turretHead.add(muzzleLeft);
+
+  const muzzleRight = new THREE.Object3D();
+  muzzleRight.position.set(0.12, 0.12, 0.78);
+  turretHead.add(muzzleRight);
+
+  const scanLight = new THREE.PointLight(0xef4444, 2.5, 8);
+  scanLight.position.set(0, 0.24, 0.35);
+  turretHead.add(scanLight);
+
+  return { root, turretHead, muzzleLeft, muzzleRight, scanLight };
+}
+
+/**
+ * Builds destructible props (wooden fences, crates, market canopies, lantern posts).
+ */
+export function buildDestructiblePropMesh(
+  kind: 'fence' | 'crate' | 'lantern' | 'canopy',
+  materials: SharedVoxelMaterials,
+): THREE.Group {
+  const group = new THREE.Group();
+  const vb = new VoxelAssembler();
+
+  if (kind === 'fence') {
+    // Japanese wooden post-and-beam fence section
+    vb.boxBottom(-0.95, 0, 0, 0.16, 1.15, 0.16, 0x5a3d28);
+    vb.boxBottom(0.95, 0, 0, 0.16, 1.15, 0.16, 0x5a3d28);
+    vb.boxBottom(0, 0.35, 0, 1.95, 0.14, 0.08, 0x785338);
+    vb.boxBottom(0, 0.82, 0, 1.95, 0.14, 0.08, 0x785338);
+  } else if (kind === 'crate') {
+    // Stackable wooden cargo crate
+    vb.boxBottom(0, 0, 0, 1.1, 1.1, 1.1, 0x85542f);
+    vb.boxBottom(0, 0.05, 0, 1.14, 0.14, 1.14, 0x3d2716);
+    vb.boxBottom(0, 0.95, 0, 1.14, 0.14, 1.14, 0x3d2716);
+  } else if (kind === 'lantern') {
+    // Traditional stone toro lantern
+    vb.boxBottom(0, 0, 0, 0.55, 0.24, 0.55, 0x6b7280);
+    vb.boxBottom(0, 0.24, 0, 0.28, 1.1, 0.28, 0x9ca3af);
+    vb.boxBottom(0, 1.34, 0, 0.48, 0.42, 0.48, 0xffe488, 'emissive');
+    vb.boxBottom(0, 1.76, 0, 0.65, 0.18, 0.65, 0x4b5563);
+  } else {
+    // Market stall canopy cloth & frame
+    vb.boxBottom(-0.9, 0, -0.6, 0.12, 2.1, 0.12, 0x785338);
+    vb.boxBottom(0.9, 0, -0.6, 0.12, 2.1, 0.12, 0x785338);
+    vb.boxBottom(-0.9, 0, 0.6, 0.12, 2.1, 0.12, 0x785338);
+    vb.boxBottom(0.9, 0, 0.6, 0.12, 2.1, 0.12, 0x785338);
+    vb.boxBottom(0, 2.1, 0, 2.1, 0.12, 1.4, 0xef4444); // Red canopy
+    vb.boxBottom(0, 2.05, 0, 2.15, 0.08, 1.45, 0xffffff); // White fringe
+  }
+
+  group.add(vb.build(materials));
+  return group;
 }

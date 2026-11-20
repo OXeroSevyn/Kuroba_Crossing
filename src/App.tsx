@@ -36,11 +36,15 @@ const INITIAL_HUD: HudSnapshot = {
     pulse: WEAPONS.pulse.magSize,
     scatter: WEAPONS.scatter.magSize,
     rail: WEAPONS.rail.magSize,
+    rpg: WEAPONS.rpg.magSize,
+    katana: 999,
   },
   magSizes: {
     pulse: WEAPONS.pulse.magSize,
     scatter: WEAPONS.scatter.magSize,
     rail: WEAPONS.rail.magSize,
+    rpg: WEAPONS.rpg.magSize,
+    katana: 999,
   },
   reloading: false,
   reloadProgress: 0,
@@ -71,6 +75,17 @@ const INITIAL_HUD: HudSnapshot = {
   vehicleHp: 120,
   vehicleMaxHp: 120,
   nearbyVehicleName: null,
+  inTank: false,
+  tankName: '',
+  tankHp: 500,
+  tankMaxHp: 500,
+  tankCannonReady: true,
+  nearbyTankName: null,
+  c4Count: 3,
+  sentriesAvailable: 1,
+  katanaReady: true,
+  overhealth: 0,
+  interactionPrompt: null,
   minimapPlayer: { x: 0, z: 6.4, yaw: 0 },
   minimapEnemies: [],
   minimapVehicles: [],
@@ -250,6 +265,18 @@ export default function App() {
           onToggleMute={handleToggleMute}
           onPause={handlePause}
           onRestart={handleDeploy}
+          onFireStart={() => engineRef.current?.triggerFire(true)}
+          onFireEnd={() => engineRef.current?.triggerFire(false)}
+          onAimToggle={() => engineRef.current?.toggleAim()}
+          onJump={() => engineRef.current?.triggerJump()}
+          onDash={() => engineRef.current?.triggerDash()}
+          onReload={() => engineRef.current?.triggerReload()}
+          onVehicleToggle={() => engineRef.current?.triggerVehicleToggle()}
+          onC4={() => engineRef.current?.triggerC4()}
+          onSentry={() => engineRef.current?.triggerSentry()}
+          onInteract={() => engineRef.current?.triggerInteract()}
+          onTouchMove={(x, y) => engineRef.current?.applyTouchMovement(x, y)}
+          onTouchLook={(dx, dy) => engineRef.current?.applyTouchLook(dx, dy)}
         />
       )}
 

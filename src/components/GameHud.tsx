@@ -9,12 +9,23 @@ interface GameHudProps {
   onToggleMute: () => void;
   onPause: () => void;
   onRestart: () => void;
+  onFireStart?: () => void;
+  onFireEnd?: () => void;
+  onAimToggle?: () => void;
+  onJump?: () => void;
+  onDash?: () => void;
+  onReload?: () => void;
+  onVehicleToggle?: () => void;
+  onC4?: () => void;
+  onSentry?: () => void;
+  onInteract?: () => void;
+  onTouchMove?: (x: number, y: number) => void;
+  onTouchLook?: (dx: number, dy: number) => void;
 }
 
 const WeaponIcon: React.FC<{ id: WeaponId; active: boolean }> = ({ id, active }) => {
   const accent = active ? WEAPONS[id].accentHex : '#a89a88';
   if (id === 'pulse') {
-    // M4-K Tactical Carbine silhouette
     return (
       <svg viewBox="0 0 38 18" className="w-8 h-4">
         <path d="M1 7h6v5H1V7zm6 1h17v4H18l2 5h-3l-2-5h-3l-2 4H8l1-4H7V8z" fill="#2c3138" stroke="#f5efe6" strokeWidth="1" />
@@ -24,7 +35,6 @@ const WeaponIcon: React.FC<{ id: WeaponId; active: boolean }> = ({ id, active })
     );
   }
   if (id === 'scatter') {
-    // M870 Breach Shotgun silhouette
     return (
       <svg viewBox="0 0 38 18" className="w-8 h-4">
         <path d="M1 10l9-2h9v4h-7l-4 4H1v-6z" fill="#6b3e22" stroke="#f5efe6" strokeWidth="1" />
@@ -33,13 +43,31 @@ const WeaponIcon: React.FC<{ id: WeaponId; active: boolean }> = ({ id, active })
       </svg>
     );
   }
-  // K-50 Precision Rifle silhouette
+  if (id === 'rail') {
+    return (
+      <svg viewBox="0 0 38 18" className="w-8 h-4">
+        <path d="M1 8h15v4h-3v4h-4v-4H1V8z" fill="#242a32" stroke="#f5efe6" strokeWidth="1" />
+        <rect x="16" y="8.5" width="18" height="2.2" fill="#cfd6dd" />
+        <rect x="33" y="7.5" width="4" height="4" fill="#3a424c" />
+        <rect x="10" y="3.5" width="11" height="3" fill={accent} />
+      </svg>
+    );
+  }
+  if (id === 'rpg') {
+    return (
+      <svg viewBox="0 0 38 18" className="w-8 h-4">
+        <path d="M2 9h20v2H2z" fill="#4d5448" />
+        <path d="M22 6l8 4-8 4V6z" fill="#3b4238" stroke="#d97706" strokeWidth="0.8" />
+        <rect x="7" y="11" width="3" height="4" fill="#1c2025" />
+        <rect x="14" y="6.5" width="4" height="2" fill={accent} />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 38 18" className="w-8 h-4">
-      <path d="M1 8h15v4h-3v4h-4v-4H1V8z" fill="#242a32" stroke="#f5efe6" strokeWidth="1" />
-      <rect x="16" y="8.5" width="18" height="2.2" fill="#cfd6dd" />
-      <rect x="33" y="7.5" width="4" height="4" fill="#3a424c" />
-      <rect x="10" y="3.5" width="11" height="3" fill={accent} />
+      <path d="M4 14l26-10c2-1 4-1 6 0l-1 2-25 9-6-1z" fill="#e4e4e7" stroke={accent} strokeWidth="1" />
+      <circle cx="8" cy="13" r="2.5" fill="#f59e0b" />
+      <rect x="2" y="13" width="5" height="2.5" fill="#18181b" transform="rotate(-20 2 13)" />
     </svg>
   );
 };
@@ -51,11 +79,74 @@ export const GameHud: React.FC<GameHudProps> = ({
   onToggleMute,
   onPause,
   onRestart,
+  onFireStart,
+  onFireEnd,
+  onAimToggle,
+  onJump,
+  onDash,
+  onReload,
+  onVehicleToggle,
+  onC4,
+  onSentry,
+  onInteract,
+  onTouchMove,
+  onTouchLook,
 }) => {
   const isZombies = hud.gameMode === 'zombies';
   const isDeathmatch = hud.gameMode === 'deathmatch';
   const isNight = hud.timeOfDay === 'night';
   const [copiedLink, setCopiedLink] = React.useState(false);
+  const [touchControlsEnabled, setTouchControlsEnabled] = React.useState(
+    () => 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+  );
+
+  // Virtual Joystick state
+  const [joystickActive, setJoystickActive] = React.useState(false);
+  const [joystickPos, setJoystickPos] = React.useState({ x: 0, y: 0 });
+  const joystickStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  const handleJoystickStart = (e: React.PointerEvent) => {
+    joystickStartRef.current = { x: e.clientX, y: e.clientY };
+    setJoystickActive(true);
+    setJoystickPos({ x: 0, y: 0 });
+  };
+
+  const handleJoystickMove = (e: React.PointerEvent) => {
+    if (!joystickActive || !joystickStartRef.current) return;
+    const dx = e.clientX - joystickStartRef.current.x;
+    const dy = e.clientY - joystickStartRef.current.y;
+    const dist = Math.hypot(dx, dy);
+    const maxRadius = 45;
+    const clampedDist = Math.min(dist, maxRadius);
+    const angle = Math.atan2(dy, dx);
+    const cx = Math.cos(angle) * clampedDist;
+    const cy = Math.sin(angle) * clampedDist;
+    setJoystickPos({ x: cx, y: cy });
+    onTouchMove?.(cx / maxRadius, -cy / maxRadius);
+  };
+
+  const handleJoystickEnd = () => {
+    setJoystickActive(false);
+    joystickStartRef.current = null;
+    setJoystickPos({ x: 0, y: 0 });
+    onTouchMove?.(0, 0);
+  };
+
+  // Virtual Touch Look pad
+  const lookStartRef = React.useRef<{ x: number; y: number } | null>(null);
+  const handleLookPointerDown = (e: React.PointerEvent) => {
+    lookStartRef.current = { x: e.clientX, y: e.clientY };
+  };
+  const handleLookPointerMove = (e: React.PointerEvent) => {
+    if (!lookStartRef.current) return;
+    const dx = e.clientX - lookStartRef.current.x;
+    const dy = e.clientY - lookStartRef.current.y;
+    lookStartRef.current = { x: e.clientX, y: e.clientY };
+    onTouchLook?.(dx, dy);
+  };
+  const handleLookPointerUp = () => {
+    lookStartRef.current = null;
+  };
 
   const handleCopyLink = () => {
     const url = `${window.location.origin}${window.location.pathname}?room=${hud.roomCode || 'tdm'}`;
@@ -160,8 +251,37 @@ export const GameHud: React.FC<GameHudProps> = ({
       </div>
       )}
 
-      {/* Vehicle / Helicopter Interaction Prompt or Active Driving Hint */}
-      {!hud.inVehicle && !hud.inHelicopter && hud.nearbyHelicopterName && (
+      {/* Vehicle / Helicopter / Tank Interaction Prompt or Active Driving Hint */}
+      {!hud.inVehicle && !hud.inHelicopter && !hud.inTank && hud.nearbyTankName && (
+        <div
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#1c241a]/95 border-2 border-[#84cc16] shadow-[0_0_20px_rgba(132,204,22,0.5)] flex items-center gap-2.5 animate-pulse"
+          data-testid="tank-prompt"
+        >
+          <span className="px-2 py-0.5 rounded bg-[#65a30d] text-[#f7fee7] font-display font-bold text-xs">
+            E
+          </span>
+          <span className="text-xs sm:text-sm font-display font-bold uppercase tracking-[0.14em] text-[#ecfccb]">
+            COMMAND {hud.nearbyTankName}
+          </span>
+        </div>
+      )}
+
+      {/* World Interaction Prompt (Ramen Stall / Vending Machine) */}
+      {hud.interactionPrompt && !hud.inVehicle && !hud.inHelicopter && !hud.inTank && (
+        <div
+          className="fixed bottom-36 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#0f172a]/95 border-2 border-[#38bdf8] shadow-[0_0_24px_rgba(56,189,248,0.6)] flex items-center gap-2.5 animate-bounce z-20 pointer-events-auto cursor-pointer"
+          onClick={() => onInteract?.()}
+        >
+          <span className="px-2 py-0.5 rounded bg-[#0284c7] text-[#f0f9ff] font-display font-bold text-xs">
+            F
+          </span>
+          <span className="text-xs sm:text-sm font-display font-bold uppercase tracking-[0.12em] text-[#bae6fd]">
+            {hud.interactionPrompt}
+          </span>
+        </div>
+      )}
+
+      {!hud.inVehicle && !hud.inHelicopter && !hud.inTank && hud.nearbyHelicopterName && (
         <div
           className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#0b1320]/95 border-2 border-[#38bdf8] shadow-[0_0_20px_rgba(56,189,248,0.5)] flex items-center gap-2.5 animate-pulse"
           data-testid="helicopter-prompt"
@@ -175,7 +295,7 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {!hud.inVehicle && !hud.inHelicopter && !hud.nearbyHelicopterName && hud.nearbyVehicleName && (
+      {!hud.inVehicle && !hud.inHelicopter && !hud.inTank && !hud.nearbyHelicopterName && !hud.nearbyTankName && hud.nearbyVehicleName && (
         <div
           className="fixed bottom-24 left-1/2 -translate-x-1/2 px-4 py-2 rounded bg-[#18141c]/94 border-2 border-[#ffd47a] shadow-[0_6px_18px_rgba(0,0,0,0.6)] flex items-center gap-2.5"
           data-testid="vehicle-prompt"
@@ -186,6 +306,12 @@ export const GameHud: React.FC<GameHudProps> = ({
           <span className="text-xs sm:text-sm font-display font-bold uppercase tracking-[0.14em] text-[#fff6e6]">
             DRIVE {hud.nearbyVehicleName}
           </span>
+        </div>
+      )}
+
+      {hud.inTank && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded bg-[#1c241a]/92 border border-[#84cc16]/50 text-[11px] font-display uppercase tracking-[0.12em] text-[#ecfccb]">
+          W/S THROTTLE · A/D STEER · MOUSE TURRET 360° · L-CLICK 120MM CANNON · R-CLICK COAXIAL MG · [E] EXIT TANK
         </div>
       )}
 
@@ -484,6 +610,24 @@ export const GameHud: React.FC<GameHudProps> = ({
         <button
           type="button"
           tabIndex={-1}
+          aria-label="Toggle mobile touch controls"
+          title="Toggle Mobile Touch Controls"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            setTouchControlsEnabled(!touchControlsEnabled);
+          }}
+          className={`pointer-events-auto px-2.5 h-10 flex items-center justify-center rounded border transition-colors cursor-pointer text-xs font-display font-bold ${
+            touchControlsEnabled
+              ? 'bg-[#0284c7]/90 border-[#38bdf8] text-[#f0f9ff]'
+              : 'bg-[#211813]/90 border-[#e6be74]/40 text-[#f5efe6] hover:bg-[#35261d]'
+          }`}
+        >
+          📱 TOUCH {touchControlsEnabled ? 'ON' : 'OFF'}
+        </button>
+
+        <button
+          type="button"
+          tabIndex={-1}
           aria-label="Pause game"
           title="Pause [Esc / P]"
           onClick={(e) => {
@@ -633,9 +777,60 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       </div>
 
-      {/* BOTTOM-RIGHT CLUSTER: Helicopter Avionics (Flying), Vehicle Speedometer (Driving) OR Weapon Readout (On Foot) */}
+      {/* BOTTOM-RIGHT CLUSTER: Tank Avionics (In Tank), Helicopter Avionics (Flying), Vehicle Speedometer (Driving) OR Weapon Readout (On Foot) */}
       <div className="fixed bottom-4 right-4 sm:bottom-5 sm:right-5 flex flex-col items-end gap-2">
-        {hud.inHelicopter ? (
+        {hud.inTank ? (
+          <div
+            className="bg-[#1c241a]/95 border-2 border-[#84cc16]/80 rounded px-4 py-3 min-w-[280px] shadow-[0_8px_24px_rgba(101,163,13,0.45)]"
+            data-testid="tank-hud"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-[#a3e635]">
+                  ARMORED CAVALRY · [E] EXIT
+                </div>
+                <div className="text-sm font-display font-bold uppercase tracking-wider text-[#f7fee7]">
+                  {hud.tankName || 'TYPE-90 VOXEL MBT'}
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-xs font-display font-bold uppercase tracking-wider text-[#bef264] block">
+                  120MM CANNON
+                </span>
+                <span className={`text-base font-display font-bold ${hud.tankCannonReady ? 'text-[#a3e635]' : 'text-[#f87171] animate-pulse'}`}>
+                  {hud.tankCannonReady ? 'READY' : 'RELOAD...'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-2.5">
+              <div className="flex justify-between text-[10px] font-display uppercase tracking-[0.18em] mb-1">
+                <span className="text-[#bef264]">COMPOSITE ARMOR</span>
+                <span className="tabular-nums text-[#f7fee7]">
+                  {hud.tankHp}/{hud.tankMaxHp}
+                </span>
+              </div>
+              <div className="h-2 bg-[#121c10] border border-[#3f6212] rounded-xs overflow-hidden">
+                <div
+                  className="h-full transition-[width] duration-75"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (hud.tankHp / Math.max(1, hud.tankMaxHp)) * 100))}%`,
+                    backgroundColor:
+                      hud.tankHp / Math.max(1, hud.tankMaxHp) > 0.5
+                        ? '#84cc16'
+                        : hud.tankHp / Math.max(1, hud.tankMaxHp) > 0.25
+                          ? '#eab308'
+                          : '#ef4444',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-2 text-[9px] font-display text-[#bef264] text-center tracking-wider">
+              [WASD] DRIVE &amp; TREAD STEER · [MOUSE] 360° TURRET · [L-CLICK] 120MM · [R-CLICK] COAXIAL MG
+            </div>
+          </div>
+        ) : hud.inHelicopter ? (
           <div
             className="bg-[#0b1320]/95 border-2 border-[#38bdf8]/80 rounded px-4 py-3 min-w-[280px] shadow-[0_8px_24px_rgba(2,132,199,0.45)]"
             data-testid="helicopter-hud"
@@ -774,7 +969,27 @@ export const GameHud: React.FC<GameHudProps> = ({
               </span>
             </div>
 
-            {/* Compact 3-weapon switcher row */}
+            {/* Tactical Special Equipment: C4 & Sentry */}
+            <div className="flex items-center gap-1.5 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => onC4?.()}
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#b91c1c]/85 border border-[#f87171]/60 text-white font-display text-[11px] font-bold shadow active:scale-95 cursor-pointer"
+              >
+                <span>💥 C4 ({hud.c4Count})</span>
+                <span className="text-[9px] opacity-75">[G]</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onSentry?.()}
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#1d4ed8]/85 border border-[#60a5fa]/60 text-white font-display text-[11px] font-bold shadow active:scale-95 cursor-pointer"
+              >
+                <span>🤖 SENTRY ({hud.sentriesAvailable})</span>
+                <span className="text-[9px] opacity-75">[T]</span>
+              </button>
+            </div>
+
+            {/* Compact 5-weapon switcher row */}
             <div className="flex items-center gap-1.5">
               {WEAPON_ORDER.map((id) => {
                 const spec = WEAPONS[id];
@@ -828,6 +1043,158 @@ export const GameHud: React.FC<GameHudProps> = ({
           </>
         )}
       </div>
+
+      {/* MOBILE / ANDROID TOUCH CONTROLS OVERLAY */}
+      {touchControlsEnabled && (
+        <div className="fixed inset-0 pointer-events-none z-30 select-none">
+          {/* Left Floating Joystick Touch Area */}
+          <div
+            className="absolute bottom-6 left-6 w-36 h-36 rounded-full bg-white/5 border border-white/20 pointer-events-auto flex items-center justify-center touch-none backdrop-blur-xs"
+            onPointerDown={handleJoystickStart}
+            onPointerMove={handleJoystickMove}
+            onPointerUp={handleJoystickEnd}
+            onPointerCancel={handleJoystickEnd}
+          >
+            {/* Center Thumb Knob */}
+            <div
+              className="w-14 h-14 rounded-full bg-gradient-to-b from-[#38bdf8] to-[#0284c7] shadow-[0_0_15px_rgba(56,189,248,0.5)] border-2 border-white/60 pointer-events-none transition-transform duration-75"
+              style={{
+                transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)`,
+              }}
+            />
+          </div>
+
+          {/* Right Touch Look Area (Drag to Aim) */}
+          <div
+            className="absolute top-16 right-0 bottom-40 left-1/2 pointer-events-auto touch-none"
+            onPointerDown={handleLookPointerDown}
+            onPointerMove={handleLookPointerMove}
+            onPointerUp={handleLookPointerUp}
+            onPointerCancel={handleLookPointerUp}
+          />
+
+          {/* Right Mobile Action Buttons Cluster */}
+          <div className="absolute bottom-6 right-6 flex flex-col items-end gap-2.5 pointer-events-none">
+            {/* Upper Action Row: ADS, Jump, Dash, Reload */}
+            <div className="flex items-center gap-2 pointer-events-auto">
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onAimToggle?.();
+                }}
+                className="w-11 h-11 rounded-full bg-[#1e293b]/90 border border-[#38bdf8] text-[#38bdf8] font-display font-bold text-[11px] flex items-center justify-center shadow-lg active:scale-95"
+              >
+                ADS
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onReload?.();
+                }}
+                className="w-11 h-11 rounded-full bg-[#1e293b]/90 border border-[#f59e0b] text-[#f59e0b] font-display font-bold text-[11px] flex items-center justify-center shadow-lg active:scale-95"
+              >
+                RLD
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onDash?.();
+                }}
+                className="w-11 h-11 rounded-full bg-[#1e293b]/90 border border-[#06b6d4] text-[#06b6d4] font-display font-bold text-[11px] flex items-center justify-center shadow-lg active:scale-95"
+              >
+                DASH
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onJump?.();
+                }}
+                className="w-13 h-13 rounded-full bg-[#334155]/90 border-2 border-[#f8fafc] text-white font-display font-bold text-xs flex items-center justify-center shadow-lg active:scale-95"
+              >
+                JUMP
+              </button>
+            </div>
+
+            {/* Tactical Special Row: C4, Sentry, Enter/Exit Vehicle, Use [F] */}
+            <div className="flex items-center gap-2 pointer-events-auto">
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onC4?.();
+                }}
+                className="px-2.5 py-1.5 rounded-lg bg-[#b91c1c]/90 border border-[#f87171] text-white font-display font-bold text-[10px] shadow active:scale-95"
+              >
+                💥 C4 ({hud.c4Count})
+              </button>
+              <button
+                type="button"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  onSentry?.();
+                }}
+                className="px-2.5 py-1.5 rounded-lg bg-[#1d4ed8]/90 border border-[#60a5fa] text-white font-display font-bold text-[10px] shadow active:scale-95"
+              >
+                🤖 SENTRY ({hud.sentriesAvailable})
+              </button>
+              {(hud.nearbyVehicleName || hud.nearbyHelicopterName || hud.nearbyTankName || hud.inVehicle || hud.inHelicopter || hud.inTank) && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    onVehicleToggle?.();
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#84cc16]/90 border border-[#bef264] text-[#141d13] font-display font-bold text-[10px] shadow active:scale-95 animate-pulse"
+                >
+                  {hud.inVehicle || hud.inHelicopter || hud.inTank ? 'EXIT' : 'ENTER'}
+                </button>
+              )}
+              {hud.interactionPrompt && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    onInteract?.();
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#0284c7]/95 border border-[#38bdf8] text-white font-display font-bold text-[10px] shadow active:scale-95 animate-bounce"
+                >
+                  USE [F]
+                </button>
+              )}
+            </div>
+
+            {/* Primary Big Fire Button */}
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                onFireStart?.();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                onFireEnd?.();
+              }}
+              onPointerLeave={(e) => {
+                e.preventDefault();
+                onFireEnd?.();
+              }}
+              className="w-18 h-18 rounded-full bg-gradient-to-tr from-[#dc2626] to-[#ef4444] border-4 border-[#fca5a5] shadow-[0_0_20px_rgba(239,68,68,0.7)] flex items-center justify-center pointer-events-auto active:scale-90 transition-transform cursor-pointer"
+            >
+              <svg viewBox="0 0 24 24" className="w-9 h-9 text-white fill-none stroke-current stroke-2">
+                <circle cx="12" cy="12" r="8" />
+                <line x1="12" y1="2" x2="12" y2="7" />
+                <line x1="12" y1="17" x2="12" y2="22" />
+                <line x1="2" y1="12" x2="7" y2="12" />
+                <line x1="17" y1="12" x2="22" y2="12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

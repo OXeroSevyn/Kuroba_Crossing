@@ -132,6 +132,42 @@ export const WEAPONS: Record<WeaponId, WeaponSpec> = {
     accentHex: '#4ef2a1',
     accentColor: 0x4ef2a1,
   },
+  rpg: {
+    id: 'rpg',
+    slot: 4,
+    name: 'RPG-7 Rocket Launcher',
+    role: 'Anti-Armor Rocket',
+    damage: 320,
+    fireInterval: 1.6,
+    magSize: 1,
+    reloadDuration: 2.1,
+    pellets: 1,
+    spreadRad: 0.001,
+    projectileSpeed: 38,
+    piercing: false,
+    recoilKick: 0.95,
+    hitstopSec: 0.08,
+    accentHex: '#ef4444',
+    accentColor: 0xef4444,
+  },
+  katana: {
+    id: 'katana',
+    slot: 5,
+    name: 'Cyber Katana',
+    role: 'Hyper-Sonic Slash',
+    damage: 140,
+    fireInterval: 0.38,
+    magSize: 999,
+    reloadDuration: 0.1,
+    pellets: 1,
+    spreadRad: 0,
+    projectileSpeed: 24,
+    piercing: true,
+    recoilKick: 0.35,
+    hitstopSec: 0.075,
+    accentHex: '#ec4899',
+    accentColor: 0xec4899,
+  },
 };
 
 export const ZOMBIE_LABELS: Record<EnemyArchetype, string> = {
@@ -142,7 +178,7 @@ export const ZOMBIE_LABELS: Record<EnemyArchetype, string> = {
   shogun: 'Alpha Nemesis',
 };
 
-export const WEAPON_ORDER: WeaponId[] = ['pulse', 'scatter', 'rail'];
+export const WEAPON_ORDER: WeaponId[] = ['pulse', 'scatter', 'rail', 'rpg', 'katana'];
 
 export interface EnemyBaseStats {
   archetype: EnemyArchetype;
@@ -259,6 +295,8 @@ export function createInitialWeaponState(magMult = 1, reloadMult = 1): WeaponRun
       pulse: getEffectiveMagSize('pulse', magMult),
       scatter: getEffectiveMagSize('scatter', magMult),
       rail: getEffectiveMagSize('rail', magMult),
+      rpg: getEffectiveMagSize('rpg', magMult),
+      katana: 999,
     },
     fireCooldown: 0,
     reloading: false,
