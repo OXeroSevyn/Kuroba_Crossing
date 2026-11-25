@@ -7,73 +7,275 @@ export interface CustomOption {
   hex: number;
   secondaryHex?: number;
   note?: string;
+  /** Operator (player) level required to equip; omitted = always available. */
+  unlockLevel?: number;
 }
+
+/** Character studio sections (Face, Hair, Body, Outfit, Gear) and the weapon cosmetics tab. */
+export type CustomGroup = 'face' | 'hair' | 'body' | 'outfit' | 'gear' | 'finish';
 
 export interface CustomCategory {
   key: keyof LoadoutConfig;
   tab: 'character' | 'gun';
+  group: CustomGroup;
   label: string;
   options: CustomOption[];
 }
 
 export const DEFAULT_LOADOUT: LoadoutConfig = {
-  headgear: 'ranger_helm',
-  visorColor: 'cyan_pulse',
+  bodyType: 'athletic',
+  skinTone: 'warm_beige',
+  faceShape: 'oval',
+  eyeStyle: 'focused',
+  visorColor: 'dark_brown',
+  browStyle: 'straight',
+  noseStyle: 'straight',
+  mouthStyle: 'neutral',
+  hairStyle: 'undercut',
+  hairColor: 'jet_black',
+  facialHair: 'stubble',
+  faceDetail: 'none',
+  headgear: 'tactical_cap',
   jacketColor: 'kuroba_orange',
   outfitStyle: 'classic_ranger',
   pantsStyle: 'navy_tac',
   backpack: 'dual_thruster',
   accentGlow: 'cyan_neon',
   gunSkin: 'gunmetal',
-  optic: 'eotech_holo',
-  muzzle: 'slotted_brake',
-  underbarrel: 'angled_grip',
-  magazine: 'standard_mag',
   tracerFx: 'classic_gold',
   charm: 'mini_torii',
 };
 
-const STORAGE_KEY = 'kuroba_crossing_loadout_v2';
+const STORAGE_KEY = 'kuroba_crossing_loadout_v3';
+const LEGACY_STORAGE_KEY = 'kuroba_crossing_loadout_v2';
+
+const sw = (hex: number) => '#' + hex.toString(16).padStart(6, '0');
+const tone = (
+  id: string,
+  label: string,
+  hex: number,
+  secondaryHex?: number,
+  extra: Partial<CustomOption> = {},
+): CustomOption => ({ id, label, swatch: sw(hex), hex, secondaryHex, ...extra });
 
 export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
-  // ===================== CHARACTER CUSTOMIZATIONS (68 OPTIONS) =====================
+  // ===================== OPERATOR BODY & FACE =====================
   {
-    key: 'headgear',
+    key: 'bodyType',
     tab: 'character',
-    label: 'Headgear',
+    group: 'body',
+    label: 'Build',
     options: [
-      { id: 'ranger_helm', label: 'Ranger Helmet', swatch: '#ede8dc', hex: 0xede8dc },
-      { id: 'ronin_kasa', label: 'Ronin Kasa', swatch: '#c99b4f', hex: 0xc99b4f },
-      { id: 'cyber_kabuto', label: 'Cyber Kabuto', swatch: '#2c313b', hex: 0x2c313b },
-      { id: 'nvg_ops', label: 'NVG Tactical', swatch: '#354238', hex: 0x354238 },
-      { id: 'kitsune_mask', label: 'Kitsune Mask', swatch: '#f5efe6', hex: 0xf5efe6 },
-      { id: 'snow_ushanka', label: 'Snow Ushanka', swatch: '#7c553b', hex: 0x7c553b },
-      { id: 'hazmat_mask', label: 'Bio Gas Mask', swatch: '#4a5248', hex: 0x4a5248 },
-      { id: 'crowned_visor', label: 'Aurora Crown', swatch: '#45e8ff', hex: 0x45e8ff },
+      tone('athletic', 'Athletic', 0x8aa1b8, undefined, { note: 'Balanced frame' }),
+      tone('slim', 'Slim Runner', 0x9fb7c9, undefined, { note: 'Narrow & tall' }),
+      tone('heavy', 'Heavy Gunner', 0x6d7f91, undefined, { note: 'Broad shoulders' }),
+      tone('tall', 'Tall Ranger', 0x7f96ac, undefined, { note: 'Long limbs' }),
+      tone('compact', 'Compact Scout', 0xa9bccd, undefined, { note: 'Short & quick' }),
+    ],
+  },
+  {
+    key: 'skinTone',
+    tab: 'character',
+    group: 'face',
+    label: 'Skin Tone',
+    options: [
+      tone('porcelain', 'Porcelain', 0xf6dccb, 0xe8bfa8),
+      tone('fair', 'Fair', 0xf0cfb0, 0xdcae8c),
+      tone('light', 'Light', 0xe6bd96, 0xcf9e76),
+      tone('warm_beige', 'Warm Beige', 0xd9a77c, 0xbf8a60),
+      tone('golden', 'Golden', 0xcf9a62, 0xb27d48),
+      tone('olive', 'Olive', 0xb98a5c, 0x9a6e44),
+      tone('tan', 'Tan', 0xa87346, 0x8a5a33),
+      tone('bronze', 'Bronze', 0x8e5c36, 0x724628),
+      tone('brown', 'Brown', 0x734528, 0x5a331d),
+      tone('deep', 'Deep Brown', 0x553220, 0x3f2417),
+    ],
+  },
+  {
+    key: 'faceShape',
+    tab: 'character',
+    group: 'face',
+    label: 'Face Shape',
+    options: [
+      tone('oval', 'Oval', 0xd9a77c),
+      tone('square', 'Square Jaw', 0xc7946a),
+      tone('round', 'Round', 0xe3b48a),
+      tone('angular', 'Angular', 0xbf8a60),
+      tone('long', 'Long', 0xcf9e76),
+    ],
+  },
+  {
+    key: 'eyeStyle',
+    tab: 'character',
+    group: 'face',
+    label: 'Eyes',
+    options: [
+      tone('focused', 'Focused', 0x2b2f36),
+      tone('wide', 'Wide Open', 0x3a404a),
+      tone('narrow', 'Narrow', 0x22262c),
+      tone('sleepy', 'Heavy-Lidded', 0x4a505a),
+      tone('fierce', 'Fierce', 0x1a1d22),
+      tone('gentle', 'Gentle', 0x5a606a),
     ],
   },
   {
     key: 'visorColor',
     tab: 'character',
-    label: 'Visor / Eyes',
+    group: 'face',
+    label: 'Eye Colour',
     options: [
-      { id: 'cyan_pulse', label: 'Cyan Pulse', swatch: '#45f2ff', hex: 0x45f2ff },
-      { id: 'crimson_hunt', label: 'Crimson Hunter', swatch: '#ff3838', hex: 0xff3838 },
-      { id: 'emerald_bio', label: 'Emerald Bio', swatch: '#4ef2a1', hex: 0x4ef2a1 },
-      { id: 'solar_gold', label: 'Solar Gold', swatch: '#ffd447', hex: 0xffd447 },
-      { id: 'ultraviolet', label: 'Ultraviolet', swatch: '#c45cff', hex: 0xc45cff },
-      { id: 'arctic_ice', label: 'Arctic Ice', swatch: '#b8ecff', hex: 0xb8ecff },
-      { id: 'amber_warm', label: 'Warm Amber', swatch: '#ff9638', hex: 0xff9638 },
-      { id: 'sakura_pink', label: 'Sakura Pink', swatch: '#ff7eb6', hex: 0xff7eb6 },
-      { id: 'acid_lime', label: 'Acid Lime', swatch: '#9eff3b', hex: 0x9eff3b },
-      { id: 'ghost_white', label: 'Ghost White', swatch: '#f5faff', hex: 0xf5faff },
-      { id: 'magma_core', label: 'Magma Core', swatch: '#ff5224', hex: 0xff5224 },
-      { id: 'stealth_dark', label: 'Stealth Dim', swatch: '#58687a', hex: 0x58687a },
+      tone('dark_brown', 'Dark Brown', 0x4a2c1a),
+      tone('hazel', 'Hazel', 0x8a6a2e),
+      tone('ocean_blue', 'Ocean Blue', 0x2f6fb0),
+      tone('forest_green', 'Forest Green', 0x3f7a3a),
+      tone('steel_grey', 'Steel Grey', 0x6f7c88),
+      tone('amber_warm', 'Warm Amber', 0xc9822c),
+      tone('cyan_pulse', 'Cyber Cyan', 0x45f2ff, undefined, { note: 'Cyber implant', unlockLevel: 3 }),
+      tone('emerald_bio', 'Emerald Bio', 0x4ef2a1, undefined, { note: 'Cyber implant', unlockLevel: 4 }),
+      tone('crimson_hunt', 'Crimson Hunter', 0xff3838, undefined, { note: 'Cyber implant', unlockLevel: 5 }),
+      tone('solar_gold', 'Solar Gold', 0xffd447, undefined, { note: 'Cyber implant', unlockLevel: 6 }),
+      tone('ultraviolet', 'Ultraviolet', 0xc45cff, undefined, { note: 'Cyber implant', unlockLevel: 7 }),
+      tone('sakura_pink', 'Sakura Pink', 0xff7eb6, undefined, { note: 'Cyber implant', unlockLevel: 8 }),
+    ],
+  },
+  {
+    key: 'browStyle',
+    tab: 'character',
+    group: 'face',
+    label: 'Eyebrows',
+    options: [
+      tone('straight', 'Straight', 0x2a1f18),
+      tone('arched', 'Arched', 0x3a2a1f),
+      tone('thick', 'Thick', 0x1f1712),
+      tone('thin', 'Thin', 0x4a3a2f),
+      tone('angry', 'Furrowed', 0x1a1410),
+      tone('split', 'Scar-Split', 0x2a1f18),
+    ],
+  },
+  {
+    key: 'noseStyle',
+    tab: 'character',
+    group: 'face',
+    label: 'Nose',
+    options: [
+      tone('straight', 'Straight', 0xc7946a),
+      tone('button', 'Button', 0xd9a77c),
+      tone('broad', 'Broad', 0xb27d48),
+      tone('hooked', 'Hooked', 0xbf8a60),
+      tone('small', 'Small', 0xe3b48a),
+    ],
+  },
+  {
+    key: 'mouthStyle',
+    tab: 'character',
+    group: 'face',
+    label: 'Expression',
+    options: [
+      tone('neutral', 'Neutral', 0xa65a4a),
+      tone('smirk', 'Smirk', 0xb2604e),
+      tone('grin', 'Confident Grin', 0xf2ece4),
+      tone('frown', 'Grim', 0x8f4a3c),
+      tone('determined', 'Gritted Teeth', 0xe8e2da),
+      tone('calm', 'Calm Smile', 0xbf6a58),
+    ],
+  },
+  {
+    key: 'faceDetail',
+    tab: 'character',
+    group: 'face',
+    label: 'Scars & Marks',
+    options: [
+      tone('none', 'Clean', 0x2e2a28),
+      tone('scar_eye', 'Eye Scar', 0xb05a50),
+      tone('scar_cheek', 'Cheek Scar', 0xa8564c),
+      tone('freckles', 'Freckles', 0x9a6a46),
+      tone('glasses', 'Tactical Glasses', 0x45f2ff),
+      tone('bandage', 'Nose Bandage', 0xf2ece0),
+      tone('war_paint', 'War Paint', 0xd43838, undefined, { unlockLevel: 2 }),
+      tone('eye_patch', 'Eye Patch', 0x1a1a1a, undefined, { unlockLevel: 3 }),
+      tone('kanji_tattoo', 'Kanji Tattoo', 0x1f2937, undefined, { unlockLevel: 4 }),
+    ],
+  },
+  {
+    key: 'hairStyle',
+    tab: 'character',
+    group: 'hair',
+    label: 'Hairstyle',
+    options: [
+      tone('undercut', 'Undercut', 0x1c1c1f),
+      tone('buzz', 'Buzz Cut', 0x2a2a2e),
+      tone('side_part', 'Side Part', 0x2f241c),
+      tone('spiky', 'Spiky', 0x24242a),
+      tone('ponytail', 'Ponytail', 0x3a2a1c),
+      tone('bob', 'Bob Cut', 0x2a1f18),
+      tone('long', 'Long & Loose', 0x3f2c1d),
+      tone('topknot', 'Samurai Topknot', 0x141416),
+      tone('afro', 'Afro', 0x1f1712),
+      tone('braids', 'Braids', 0x2a1f18),
+      tone('bald', 'Shaved', 0xd9a77c),
+      tone('mohawk', 'Mohawk', 0xd43b8c, undefined, { unlockLevel: 3 }),
+    ],
+  },
+  {
+    key: 'hairColor',
+    tab: 'character',
+    group: 'hair',
+    label: 'Hair Colour',
+    options: [
+      tone('jet_black', 'Jet Black', 0x16161a),
+      tone('dark_brown', 'Dark Brown', 0x3a2519),
+      tone('chestnut', 'Chestnut', 0x6b3e22),
+      tone('auburn', 'Auburn', 0x8f3a1f),
+      tone('ginger', 'Ginger', 0xc0602a),
+      tone('blonde', 'Blonde', 0xd9b66a),
+      tone('platinum', 'Platinum', 0xe8e2d4),
+      tone('silver', 'Silver', 0xa8b0b8),
+      tone('sakura', 'Sakura Pink', 0xf08ab4, undefined, { unlockLevel: 2 }),
+      tone('aurora', 'Aurora Cyan', 0x38d8f0, undefined, { unlockLevel: 3 }),
+      tone('violet', 'Fungi Violet', 0x8a5ad8, undefined, { unlockLevel: 4 }),
+      tone('lime', 'Acid Lime', 0x9eea3b, undefined, { unlockLevel: 5 }),
+    ],
+  },
+  {
+    key: 'facialHair',
+    tab: 'character',
+    group: 'hair',
+    label: 'Facial Hair',
+    options: [
+      tone('none', 'Clean Shaven', 0xd9a77c),
+      tone('stubble', 'Stubble', 0x4a3a2f),
+      tone('mustache', 'Mustache', 0x2a1f18),
+      tone('goatee', 'Goatee', 0x2a1f18),
+      tone('chin_strap', 'Chin Strap', 0x2a1f18),
+      tone('full_beard', 'Full Beard', 0x2a1f18),
+    ],
+  },
+
+  // ===================== OUTFIT & GEAR =====================
+  {
+    key: 'headgear',
+    tab: 'character',
+    group: 'gear',
+    label: 'Headgear',
+    options: [
+      { id: 'none', label: 'Bare Head', swatch: '#3a3f47', hex: 0x3a3f47 },
+      { id: 'tactical_cap', label: 'Tactical Cap', swatch: '#2f3a2c', hex: 0x2f3a2c },
+      { id: 'headband', label: 'Hachimaki Band', swatch: '#f2efe8', hex: 0xf2efe8, secondaryHex: 0xd43b2c },
+      { id: 'beanie', label: 'Knit Beanie', swatch: '#3b4a5a', hex: 0x3b4a5a },
+      { id: 'ranger_helm', label: 'Ranger Helmet', swatch: '#ede8dc', hex: 0xede8dc },
+      { id: 'ronin_kasa', label: 'Ronin Kasa', swatch: '#c99b4f', hex: 0xc99b4f },
+      { id: 'snow_ushanka', label: 'Snow Ushanka', swatch: '#7c553b', hex: 0x7c553b },
+      { id: 'hazmat_mask', label: 'Bio Gas Mask', swatch: '#4a5248', hex: 0x4a5248, unlockLevel: 3 },
+      { id: 'nvg_ops', label: 'NVG Tactical', swatch: '#354238', hex: 0x354238, unlockLevel: 4 },
+      { id: 'kitsune_mask', label: 'Kitsune Mask', swatch: '#f5efe6', hex: 0xf5efe6, unlockLevel: 5 },
+      { id: 'cyber_kabuto', label: 'Cyber Kabuto', swatch: '#2c313b', hex: 0x2c313b, unlockLevel: 6 },
+      { id: 'crowned_visor', label: 'Aurora Crown', swatch: '#45e8ff', hex: 0x45e8ff, unlockLevel: 10 },
     ],
   },
   {
     key: 'jacketColor',
     tab: 'character',
+    group: 'outfit',
     label: 'Armor & Jacket',
     options: [
       { id: 'kuroba_orange', label: 'Kuroba Orange', swatch: '#e87a2e', hex: 0xe87a2e, secondaryHex: 0xc25b1d },
@@ -95,6 +297,7 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
   {
     key: 'outfitStyle',
     tab: 'character',
+    group: 'outfit',
     label: 'Outfit Rig',
     options: [
       { id: 'classic_ranger', label: 'Classic Ranger', swatch: '#f0e9dc', hex: 0xf0e9dc },
@@ -110,6 +313,7 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
   {
     key: 'pantsStyle',
     tab: 'character',
+    group: 'outfit',
     label: 'Legs & Boots',
     options: [
       { id: 'navy_tac', label: 'Navy Tactical', swatch: '#26344a', hex: 0x26344a, secondaryHex: 0x1c222e },
@@ -125,6 +329,7 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
   {
     key: 'backpack',
     tab: 'character',
+    group: 'gear',
     label: 'Back Gear',
     options: [
       { id: 'dual_thruster', label: 'Dual Thruster', swatch: '#525b66', hex: 0x525b66 },
@@ -140,6 +345,7 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
   {
     key: 'accentGlow',
     tab: 'character',
+    group: 'outfit',
     label: 'Suit Glow',
     options: [
       { id: 'cyan_neon', label: 'Aurora Cyan', swatch: '#45f2ff', hex: 0x45f2ff },
@@ -155,10 +361,11 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
     ],
   },
 
-  // ===================== GUN ARMORY CUSTOMIZATIONS (60 OPTIONS) =====================
+  // ===================== WEAPON FINISH (shared cosmetics; attachments live in armory.ts) =====================
   {
     key: 'gunSkin',
     tab: 'gun',
+    group: 'finish',
     label: 'Weapon Finish',
     options: [
       { id: 'gunmetal', label: 'Matte Gunmetal', swatch: '#2b313a', hex: 0x262b32, secondaryHex: 0x3b424c },
@@ -178,66 +385,9 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
     ],
   },
   {
-    key: 'optic',
-    tab: 'gun',
-    label: 'Optic / Sight',
-    options: [
-      { id: 'eotech_holo', label: 'EOTech Holo', swatch: '#3bf58a', hex: 0x3bf58a, note: 'Balanced' },
-      { id: 'red_dot', label: 'Micro Red Dot', swatch: '#ff3b30', hex: 0xff3b30, note: 'Crisp Aim' },
-      { id: 'acog_4x', label: 'ACOG 4x Scope', swatch: '#ffae34', hex: 0xffae34, note: '+10% Tighter Spread' },
-      { id: 'thermal_nv', label: 'Thermal Night', swatch: '#45f2ff', hex: 0x45f2ff, note: 'Night Clear' },
-      { id: 'long_sniper', label: 'Long Range 8x', swatch: '#4ef2a1', hex: 0x4ef2a1, note: '+18% Tighter Spread' },
-      { id: 'iron_ring', label: 'Ghost Iron Ring', swatch: '#a8b0b8', hex: 0xa8b0b8, note: 'Classic' },
-      { id: 'cyber_rail', label: 'Aurora Smart-Sight', swatch: '#ff4fd8', hex: 0xff4fd8, note: '+12% Tighter Spread' },
-      { id: 'dual_cant', label: 'Dual Canted Optic', swatch: '#ffd447', hex: 0xffd447, note: 'Hybrid' },
-    ],
-  },
-  {
-    key: 'muzzle',
-    tab: 'gun',
-    label: 'Muzzle Mod',
-    options: [
-      { id: 'slotted_brake', label: 'Slotted Brake', swatch: '#48505a', hex: 0x48505a, note: 'Balanced' },
-      { id: 'suppressor', label: 'Spec Suppressor', swatch: '#262b32', hex: 0x262b32, note: '-20% Recoil' },
-      { id: 'heavy_comp', label: 'Heavy Compensator', swatch: '#68727d', hex: 0x68727d, note: '-25% Recoil' },
-      { id: 'breach_spike', label: 'Breacher Teeth', swatch: '#a8342a', hex: 0xa8342a, note: '+8% Damage' },
-      { id: 'flash_hider', label: 'Prong Flash Hider', swatch: '#3c424a', hex: 0x3c424a, note: 'Low Flash' },
-      { id: 'twin_cannon', label: 'Twin-Port Brake', swatch: '#d9a844', hex: 0xd9a844, note: '+10% Damage' },
-      { id: 'cryo_shroud', label: 'Cryo Barrel Shroud', swatch: '#7cc4ff', hex: 0x7cc4ff, note: '+10% Velocity' },
-      { id: 'long_choke', label: 'Extended Choke', swatch: '#525b66', hex: 0x525b66, note: '-15% Spread' },
-    ],
-  },
-  {
-    key: 'underbarrel',
-    tab: 'gun',
-    label: 'Underbarrel',
-    options: [
-      { id: 'angled_grip', label: 'Angled Foregrip', swatch: '#2a3038', hex: 0x2a3038 },
-      { id: 'vertical_grip', label: 'Vertical Tac-Grip', swatch: '#3c434d', hex: 0x3c434d },
-      { id: 'laser_pod', label: 'Crimson Laser', swatch: '#ff2f38', hex: 0xff2f38 },
-      { id: 'grenade_tube', label: 'M203 Launcher', swatch: '#485244', hex: 0x485244 },
-      { id: 'heavy_bipod', label: 'Deployed Bipod', swatch: '#5e6670', hex: 0x5e6670 },
-      { id: 'floodlight', label: 'High-Beam Torch', swatch: '#fff3c4', hex: 0xfff3c4 },
-      { id: 'bayonet_blade', label: 'Tactical Bayonet', swatch: '#cfd6dd', hex: 0xcfd6dd },
-      { id: 'stubby_grip', label: 'Stubby Polymer', swatch: '#8f7a5b', hex: 0x8f7a5b },
-    ],
-  },
-  {
-    key: 'magazine',
-    tab: 'gun',
-    label: 'Magazine / Feed',
-    options: [
-      { id: 'standard_mag', label: 'Standard Mag', swatch: '#2d3238', hex: 0x2d3238, note: 'Standard' },
-      { id: 'extended_mag', label: 'Extended Mag', swatch: '#4c545e', hex: 0x4c545e, note: '+25% Mag Size' },
-      { id: 'fast_dual', label: 'Taped Fast-Mag', swatch: '#b89448', hex: 0xb89448, note: '-22% Reload Time' },
-      { id: 'drum_mag', label: 'Twin Drum Mag', swatch: '#383e47', hex: 0x383e47, note: '+50% Mag Size' },
-      { id: 'light_skel', label: 'Skeletal Light', swatch: '#737d87', hex: 0x737d87, note: '-12% Reload Time' },
-      { id: 'cryo_cell', label: 'Aurora Cell-Mag', swatch: '#45e8ff', hex: 0x45e8ff, note: '+15% Cap & Fast' },
-    ],
-  },
-  {
     key: 'tracerFx',
     tab: 'gun',
+    group: 'finish',
     label: 'Tracer & Flash',
     options: [
       { id: 'classic_gold', label: 'Classic Brass', swatch: '#ffc65c', hex: 0xffc65c },
@@ -253,6 +403,7 @@ export const CUSTOMIZATION_CATEGORIES: CustomCategory[] = [
   {
     key: 'charm',
     tab: 'gun',
+    group: 'finish',
     label: 'Weapon Charm',
     options: [
       { id: 'none', label: 'No Charm', swatch: '#2e2a28', hex: 0x2e2a28 },
@@ -286,50 +437,21 @@ export function randomizeLoadout(rng: () => number = Math.random): LoadoutConfig
 }
 
 export interface LoadoutCombatModifiers {
-  damageMult: number;
-  magMult: number;
-  reloadMult: number;
-  spreadMult: number;
-  recoilMult: number;
-  speedMult: number;
   tracerColor: number;
 }
 
 export function computeLoadoutModifiers(loadout: LoadoutConfig): LoadoutCombatModifiers {
-  let damageMult = 1.0;
-  let magMult = 1.0;
-  let reloadMult = 1.0;
-  let spreadMult = 1.0;
-  let recoilMult = 1.0;
-  let speedMult = 1.0;
+  return { tracerColor: getOption('tracerFx', loadout.tracerFx).hex };
+}
 
-  if (loadout.optic === 'acog_4x') spreadMult *= 0.9;
-  else if (loadout.optic === 'long_sniper') spreadMult *= 0.82;
-  else if (loadout.optic === 'cyber_rail') spreadMult *= 0.88;
-
-  if (loadout.muzzle === 'suppressor') recoilMult *= 0.8;
-  else if (loadout.muzzle === 'heavy_comp') recoilMult *= 0.75;
-  else if (loadout.muzzle === 'breach_spike') damageMult *= 1.08;
-  else if (loadout.muzzle === 'twin_cannon') damageMult *= 1.1;
-  else if (loadout.muzzle === 'cryo_shroud') speedMult *= 1.1;
-  else if (loadout.muzzle === 'long_choke') spreadMult *= 0.85;
-
-  if (loadout.magazine === 'extended_mag') magMult *= 1.25;
-  else if (loadout.magazine === 'fast_dual') reloadMult *= 0.78;
-  else if (loadout.magazine === 'drum_mag') magMult *= 1.5;
-  else if (loadout.magazine === 'light_skel') reloadMult *= 0.88;
-  else if (loadout.magazine === 'cryo_cell') {
-    magMult *= 1.15;
-    reloadMult *= 0.9;
-  }
-
-  const tracerColor = getOption('tracerFx', loadout.tracerFx).hex;
-  return { damageMult, magMult, reloadMult, spreadMult, recoilMult, speedMult, tracerColor };
+/** Whether an option is equippable at the given operator level. */
+export function isOptionUnlocked(opt: CustomOption, playerLevel: number): boolean {
+  return (opt.unlockLevel ?? 1) <= playerLevel;
 }
 
 export function loadSavedLoadout(): LoadoutConfig {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return { ...DEFAULT_LOADOUT };
     const parsed = JSON.parse(raw) as Partial<LoadoutConfig>;
     const merged: LoadoutConfig = { ...DEFAULT_LOADOUT };

@@ -8,12 +8,32 @@ import {
   createInitialWeaponState,
   ENEMY_STATS,
   pointHitsBox,
+  queryNearbyColliders,
   resolveCylinderWorldCollision,
   stepPlayerKinematics,
   stepWeaponState,
   TOTAL_WAVES,
   WEAPONS,
+  applyWeaponOverrides,
+  BASE_WEAPONS,
 } from './rules';
+import {
+  attachmentsFor,
+  DEFAULT_GUN_BUILDS,
+  FIREARMS,
+  resolveGun,
+  sanitizeBuild,
+  slotAvailable,
+} from './armory';
+import { generateOperator } from './character';
+import {
+  awardKill,
+  createProgression,
+  levelInfo,
+  playerLevelInfo,
+  weaponLevelInfo,
+  xpForLevel,
+} from './progression';
 import type { ColliderBox } from './types';
 
 test('player kinematics: smooth movement, jump coyote time, and landing squash', () => {
@@ -236,7 +256,7 @@ test('scoring combo multiplier and projectile box collision check', () => {
 });
 
 import {
-  computeLoadoutModifiers,
+  CUSTOMIZATION_CATEGORIES,
   DEFAULT_LOADOUT,
   getTotalCustomizationCount,
   randomizeLoadout,
@@ -282,22 +302,120 @@ function makeTestVehicle(overrides: Partial<VehicleKinematicsState> = {}): Vehic
   };
 }
 
-test('customization catalog exposes 100+ real character and gun options with combat modifiers', () => {
+test('customization catalog exposes a deep operator creator plus weapon finishes', () => {
   const total = getTotalCustomizationCount();
-  assert.ok(total >= 120, `Expected at least 120 customizations, got ${total}`);
-
-  const boosted = computeLoadoutModifiers({
-    ...DEFAULT_LOADOUT,
-    optic: 'long_sniper',
-    muzzle: 'twin_cannon',
-    magazine: 'drum_mag',
-  });
-  assert.ok(boosted.magMult >= 1.45, 'drum_mag should increase mag size');
-  assert.ok(boosted.damageMult > 1.05, 'twin_cannon should increase damage');
-  assert.ok(boosted.spreadMult < 0.9, 'long_sniper should tighten spread');
-
+  assert.ok(total >= 150, `Expected at least 150 customizations, got ${total}`);
+  const keys = new Set(CUSTOMIZATION_CATEGORIES.map((c) => c.key));
+  for (const k of ['skinTone', 'faceShape', 'eyeStyle', 'browStyle', 'noseStyle', 'mouthStyle', 'hairStyle', 'hairColor', 'facialHair']) {
+    assert.ok(keys.has(k as keyof typeof DEFAULT_LOADOUT), `missing face/hair category ${k}`);
+  }
+  for (const cat of CUSTOMIZATION_CATEGORIES) {
+    assert.ok(cat.options.some((o) => o.id === DEFAULT_LOADOUT[cat.key]), `default for ${cat.key} must exist`);
+  }
   const rand = randomizeLoadout(() => 0.5);
-  assert.ok(rand.headgear && rand.gunSkin && rand.charm);
+  assert.ok(rand.headgear && rand.gunSkin && rand.charm && rand.hairStyle);
+});
+
+test('armory resolves gun models and attachments into real stat changes', () => {
+  const base = resolveGun('pulse', DEFAULT_GUN_BUILDS.pulse, BASE_WEAPONS.pulse);
+  assert.equal(base.spec.magSize, BASE_WEAPONS.pulse.magSize);
+  assert.equal(base.spec.damage, BASE_WEAPONS.pulse.damage);
+
+  const drum = resolveGun('pulse', { ...DEFAULT_GUN_BUILDS.pulse, magazine: 'drum_mag' }, BASE_WEAPONS.pulse);
+  assert.ok(drum.spec.magSize > base.spec.magSize * 1.5, 'drum mag adds capacity');
+  const brake = resolveGun('pulse', { ...DEFAULT_GUN_BUILDS.pulse, muzzle: 'twin_cannon' }, BASE_WEAPONS.pulse);
+  assert.ok(brake.spec.damage > base.spec.damage, 'twin-port brake adds damage');
+  const sniper = resolveGun('pulse', { ...DEFAULT_GUN_BUILDS.pulse, optic: 'long_sniper' }, BASE_WEAPONS.pulse);
+  assert.ok(sniper.adsSpreadMult < base.adsSpreadMult, '8x scope tightens aimed spread');
+  assert.equal(sniper.optic.zoom, 8);
+
+  const smg = resolveGun('pulse', { ...DEFAULT_GUN_BUILDS.pulse, variant: 'smg' }, BASE_WEAPONS.pulse);
+  assert.ok(smg.spec.fireInterval < base.spec.fireInterval, 'SMG fires faster');
+  assert.equal(smg.spec.name, 'Hornet MP-9');
+
+  // Double-barrel has no magazine mount: mag attachments never change its 2 shells
+  const coach = resolveGun('scatter', { ...DEFAULT_GUN_BUILDS.scatter, variant: 'coach', magazine: 'drum_mag' }, BASE_WEAPONS.scatter);
+  assert.equal(coach.spec.magSize, 2);
+  assert.equal(slotAvailable('scatter', 'coach', 'magazine'), false);
+
+  // Every firearm can mount at least one magnified scope
+  for (const f of FIREARMS) {
+    assert.ok(attachmentsFor(f, 'optic').some((a) => (a.optic?.zoom ?? 1) >= 2), `${f} needs a scope option`);
+  }
+});
+
+test('locked gun models and attachments are reverted to defaults', () => {
+  const fresh = { playerLevel: 1, weaponLevels: { pulse: 1, scatter: 1, rail: 1, rpg: 1, katana: 1 } };
+  const locked = sanitizeBuild('pulse', { ...DEFAULT_GUN_BUILDS.pulse, variant: 'lmg', optic: 'variable_scope', muzzle: 'suppressor' }, fresh);
+  assert.equal(locked.variant, DEFAULT_GUN_BUILDS.pulse.variant);
+  assert.equal(locked.optic, DEFAULT_GUN_BUILDS.pulse.optic);
+  assert.equal(locked.muzzle, DEFAULT_GUN_BUILDS.pulse.muzzle);
+
+  const veteran = { playerLevel: 10, weaponLevels: { pulse: 10, scatter: 10, rail: 10, rpg: 10, katana: 10 } };
+  const ok = sanitizeBuild('pulse', { ...DEFAULT_GUN_BUILDS.pulse, variant: 'lmg', optic: 'variable_scope', muzzle: 'suppressor' }, veteran);
+  assert.equal(ok.variant, 'lmg');
+  assert.equal(ok.optic, 'variable_scope');
+  assert.equal(ok.muzzle, 'suppressor');
+
+  // Launcher-only scope cannot go on a rifle; the sniper starts with its 8x
+  assert.equal(sanitizeBuild('pulse', { ...DEFAULT_GUN_BUILDS.pulse, optic: 'pgo7' }, veteran).optic, DEFAULT_GUN_BUILDS.pulse.optic);
+  assert.equal(sanitizeBuild('rail', DEFAULT_GUN_BUILDS.rail, fresh).optic, 'long_sniper');
+});
+
+test('weapon overrides write resolved stats into WEAPONS and can be reset', () => {
+  applyWeaponOverrides({ pulse: { damage: 99, magSize: 77 } });
+  assert.equal(WEAPONS.pulse.damage, 99);
+  assert.equal(WEAPONS.pulse.magSize, 77);
+  applyWeaponOverrides({});
+  assert.equal(WEAPONS.pulse.damage, BASE_WEAPONS.pulse.damage);
+  assert.equal(WEAPONS.pulse.magSize, BASE_WEAPONS.pulse.magSize);
+});
+
+test('kills level up the operator and the gun in hand, announcing unlocks', () => {
+  assert.equal(xpForLevel(1, 500), 0);
+  assert.equal(levelInfo(0, 500, 10).level, 1);
+  assert.equal(levelInfo(500, 500, 10).level, 2);
+
+  let state = createProgression();
+  const all: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const r = awardKill(state, 'pulse', 200);
+    state = r.state;
+    all.push(...r.events.map((e) => e.title));
+  }
+  assert.equal(state.playerXp, 1600);
+  assert.equal(state.weaponXp.pulse, 1600);
+  assert.equal(weaponLevelInfo(state, 'pulse').level, 3);
+  assert.equal(playerLevelInfo(state).level, 2);
+  assert.ok(all.includes('Rifle Level 2'));
+  assert.ok(all.some((t) => t.includes('unlocked')), 'level-ups announce new attachments');
+  assert.ok(all.includes('AK-74 "Ronin" unlocked'), 'operator level 2 unlocks the AK');
+
+  // Vehicle kills give operator XP only
+  const v = awardKill(state, null, 200);
+  assert.equal(v.state.weaponXp.pulse, state.weaponXp.pulse);
+  assert.equal(v.state.playerXp, state.playerXp + 200);
+});
+
+test('operator generator is deterministic per seed, honours locks and unlock levels', () => {
+  const a = generateOperator({ seed: 'ABC-123', archetype: 'ronin', current: DEFAULT_LOADOUT, locks: [], playerLevel: 1 });
+  const b = generateOperator({ seed: 'ABC-123', archetype: 'ronin', current: DEFAULT_LOADOUT, locks: [], playerLevel: 1 });
+  assert.deepEqual(a, b);
+  const c = generateOperator({ seed: 'XYZ-999', archetype: 'ronin', current: DEFAULT_LOADOUT, locks: [], playerLevel: 1 });
+  assert.notDeepEqual(a.loadout, c.loadout);
+  assert.ok(a.profile.name.length > 3 && a.profile.callsign.length > 1);
+
+  // Nothing above operator level 1 is handed out to a new player
+  for (const cat of CUSTOMIZATION_CATEGORIES) {
+    const opt = cat.options.find((o) => o.id === a.loadout[cat.key]);
+    assert.ok(opt && (opt.unlockLevel ?? 1) <= 1, `${cat.key}=${a.loadout[cat.key]} should be unlocked`);
+  }
+
+  // Locked face keeps every face trait from the current operator
+  const locked = generateOperator({ seed: 'XYZ-999', archetype: 'runner', current: a.loadout, locks: ['face'], playerLevel: 1 });
+  for (const cat of CUSTOMIZATION_CATEGORIES.filter((c) => c.group === 'face')) {
+    assert.equal(locked.loadout[cat.key], a.loadout[cat.key]);
+  }
 });
 
 test('open-world 4-zone detection maps Kuroba Crossing, Aurora City, Fungi Forest, and Kopenhime Snowpeak', () => {
@@ -394,3 +512,41 @@ test('car-vs-car collision separates vehicles, transfers crash impulse, and comp
   assert.equal(calculateExplosionDamage(13, 12, 220), 0);
 });
 
+
+test('collider broadphase grid never misses a box near the query point (large open-world lists)', () => {
+  let seed = 7;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0xffffffff;
+  };
+  const boxes = Array.from({ length: 600 }, (_, i) => {
+    const x = (rnd() - 0.5) * 280;
+    const z = (rnd() - 0.5) * 280;
+    const w = 0.2 + rnd() * (i % 17 === 0 ? 30 : 4);
+    const d = 0.2 + rnd() * (i % 13 === 0 ? 30 : 4);
+    return { id: `b${i}`, minX: x, maxX: x + w, minY: 0, maxY: 3, minZ: z, maxZ: z + d, blocksBullets: true };
+  });
+  for (let q = 0; q < 400; q++) {
+    const x = (rnd() - 0.5) * 300;
+    const z = (rnd() - 0.5) * 300;
+    const reach = 0.5 + rnd() * 8;
+    const near = new Set(queryNearbyColliders(boxes, x, z, reach));
+    for (const b of boxes) {
+      const dx = Math.max(b.minX - x, 0, x - b.maxX);
+      const dz = Math.max(b.minZ - z, 0, z - b.maxZ);
+      if (dx <= reach && dz <= reach) {
+        assert.ok(near.has(b), `box ${b.id} within reach of (${x.toFixed(1)}, ${z.toFixed(1)}) was missed`);
+      }
+    }
+  }
+  // Grid rebuilds after the list shrinks (e.g. a destructible prop collider is spliced out)
+  const removed = boxes.splice(5, 1)[0];
+  const cx = (removed.minX + removed.maxX) / 2;
+  const cz = (removed.minZ + removed.maxZ) / 2;
+  assert.ok(!queryNearbyColliders(boxes, cx, cz, 1).includes(removed));
+  // Character still gets pushed out of a wall through the grid path
+  boxes.push({ id: 'wall', minX: 100, maxX: 101, minY: 0, maxY: 3, minZ: 140, maxZ: 146, blocksBullets: true });
+  const res = resolveCylinderWorldCollision(100.2, 0, 143, 0.45, 1.65, boxes);
+  assert.ok(res.hitWall);
+  assert.ok(res.x < 100 - 0.44, 'pushed out of the west face of the wall');
+});

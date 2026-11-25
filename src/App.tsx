@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { CustomizationOverlay } from './components/CustomizationOverlay';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { LoadoutStudio } from './components/LoadoutStudio';
 import { GameHud } from './components/GameHud';
 import { StatusModal } from './components/StatusModal';
 import { TitleOverlay } from './components/TitleOverlay';
-import { DEFAULT_LOADOUT, loadSavedLoadout, randomizeLoadout } from './game/customization';
+import { loadGunBuilds } from './game/armory';
+import { loadProfile, type OperatorProfile, saveProfile } from './game/character';
+import { DEFAULT_LOADOUT, loadSavedLoadout } from './game/customization';
+import { loadProgression, type ProgressionState } from './game/progression';
 import { PLAYER_MAX_HP, WEAPONS } from './game/rules';
-import type { GameMode, HudSnapshot, LoadoutConfig, RunSummary, WeaponId } from './game/types';
+import type { FirearmId, GameMode, GunBuild, GunBuilds, HudSnapshot, LoadoutConfig, RunSummary, WeaponId } from './game/types';
 import { VoxelGameEngine } from './game/VoxelGameEngine';
 import { gameAudio } from './game/audio';
 
@@ -49,6 +52,21 @@ const INITIAL_HUD: HudSnapshot = {
   reloading: false,
   reloadProgress: 0,
   aiming: false,
+  scope: {
+    blend: 0,
+    fullscreen: false,
+    reticle: 'holo',
+    zoom: 1,
+    reticleColor: '#3bf58a',
+    opticName: '',
+    rangeM: null,
+    variableZoom: false,
+  },
+  unlockToasts: [],
+  playerLevel: 1,
+  playerLevelProgress: 0,
+  weaponLevel: 1,
+  weaponLevelProgress: 0,
   pointerLocked: false,
   hitmarkerTimer: 0,
   hitmarkerCrit: false,
@@ -96,6 +114,9 @@ export default function App() {
   const engineRef = useRef<VoxelGameEngine | null>(null);
   const [hud, setHud] = useState<HudSnapshot>(INITIAL_HUD);
   const [loadout, setLoadout] = useState<LoadoutConfig>(() => loadSavedLoadout());
+  const [gunBuilds, setGunBuilds] = useState<GunBuilds>(() => loadGunBuilds());
+  const [progression, setProgression] = useState<ProgressionState>(() => loadProgression());
+  const [profile, setProfile] = useState<OperatorProfile>(() => loadProfile());
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
   const [musicVolume, setMusicVolume] = useState(() => gameAudio.getMusicVolume());
 
@@ -118,6 +139,8 @@ export default function App() {
     });
     engineRef.current = engine;
     setLoadout(engine.getLoadout());
+    setGunBuilds(engine.getGunBuilds());
+    setProgression(engine.getProgression());
 
     const params = new URLSearchParams(window.location.search);
     const roomParam = params.get('room') || params.get('join');
@@ -152,6 +175,14 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (hud.phase === 'customize' && engine) {
+      setGunBuilds(engine.getGunBuilds());
+      setProgression(engine.getProgression());
+    }
+  }, [hud.phase]);
+
   const handleOpenCustomize = () => {
     setRunSummary(null);
     engineRef.current?.openCustomize();
@@ -168,9 +199,16 @@ export default function App() {
     if (updated) setLoadout(updated);
   };
 
-  const handleRandomizeLoadout = () => {
-    const updated = engineRef.current?.setFullLoadout(randomizeLoadout());
+  const handleApplyGenerated = (next: LoadoutConfig, nextProfile: OperatorProfile) => {
+    const updated = engineRef.current?.setFullLoadout(next);
     if (updated) setLoadout(updated);
+    setProfile(nextProfile);
+    saveProfile(nextProfile);
+  };
+
+  const handleProfileChange = (next: OperatorProfile) => {
+    setProfile(next);
+    saveProfile(next);
   };
 
   const handleResetLoadout = () => {
@@ -178,9 +216,15 @@ export default function App() {
     if (updated) setLoadout(updated);
   };
 
-  const handleCustomizeTabChange = (tab: 'character' | 'gun', weapon?: WeaponId) => {
-    engineRef.current?.setCustomizeView(tab, weapon);
+  const handleSetGunBuild = (firearm: FirearmId, build: GunBuild) => {
+    const updated = engineRef.current?.setGunBuild(firearm, build);
+    if (updated) setGunBuilds(updated);
   };
+
+  // Stable: the studio calls this from effects
+  const handleStudioView = useCallback((view: 'character' | 'face' | 'gun', weapon?: WeaponId) => {
+    engineRef.current?.setCustomizeView(view, weapon);
+  }, []);
 
   const handleResume = () => {
     engineRef.current?.resumeGame();
@@ -240,16 +284,20 @@ export default function App() {
       )}
 
       {hud.phase === 'customize' && (
-        <CustomizationOverlay
+        <LoadoutStudio
           loadout={loadout}
+          builds={gunBuilds}
+          progression={progression}
+          profile={profile}
           activeWeapon={hud.weapon}
           timeOfDay={hud.timeOfDay}
           gameMode={hud.gameMode}
           onSelectOption={handleSelectLoadoutOption}
-          onRandomize={handleRandomizeLoadout}
-          onReset={handleResetLoadout}
-          onTabChange={handleCustomizeTabChange}
-          onSelectWeapon={handleSelectWeapon}
+          onApplyGenerated={handleApplyGenerated}
+          onProfileChange={handleProfileChange}
+          onResetOperator={handleResetLoadout}
+          onSetGunBuild={handleSetGunBuild}
+          onView={handleStudioView}
           onToggleTimeOfDay={handleToggleTimeOfDay}
           onSelectMode={handleSelectMode}
           onBackToTitle={handleTitle}
