@@ -1,9 +1,19 @@
 import * as THREE from 'three';
+import { type AuroraCity, type AuroraStyleKit, createAuroraCity, createAuroraStyleKit } from './aurora/auroraCity';
+import {
+  AURORA_BORDER_X,
+  AURORA_NORTH_Z,
+  AURORA_ORIGIN_X,
+  AURORA_ORIGIN_Z,
+  AURORA_SCALE,
+  AURORA_YAW,
+  auroraLocalToWorld,
+  isInAuroraFootprint,
+} from './aurora/auroraLayout';
 import type { ColliderBox, VehicleKind, WorldZoneId } from './types';
 import {
   createAsphaltRoadTexture,
   createContactShadowMesh,
-  createMeadowGroundTexture,
   createShopSignTexture,
   type SharedVoxelMaterials,
   VoxelAssembler,
@@ -63,7 +73,14 @@ export interface BuiltWorld {
   mistLayers: MistLayerItem[];
   explosiveBarrels: ExplosiveBarrelItem[];
   disposables: Array<{ dispose: () => void }>;
+  /** Ported Aurora City diorama (west zone): needs per-frame update & day/night sync. */
+  auroraCity: AuroraCity;
+  /** Aurora-style micro-voxel dressing of Kuroba Crossing (wind-swayed trees, petals). */
+  kurobaStyle: AuroraStyleKit;
 }
+
+/** The Kuroba railway (z = 2) now ends at a buffer stop on the Aurora border. */
+export const RAILWAY_WEST_END_X = AURORA_BORDER_X + 3;
 
 /**
  * Constructs the expansive 4-region voxel open world ("Kuroba Crossing", "Aurora City",
@@ -88,21 +105,39 @@ export function buildKurobaWorld(
     colliders.push(box);
   };
 
-  // 1. EXPANSIVE 360x360 OPEN-WORLD MEADOW TERRAIN
-  const grassTex = createMeadowGroundTexture(maxAnisotropy);
-  grassTex.repeat.set(34, 34);
+  // 1. EXPANSIVE 360x360 OPEN-WORLD MEADOW TERRAIN — Aurora City's flat island green, broken up
+  // with micro-voxel tonal grass patches around Kuroba (see dressKurobaInAuroraStyle)
   const groundMat = new THREE.MeshStandardMaterial({
-    map: grassTex,
-    color: 0xffffff,
+    color: AURORA_GRASS,
     roughness: 0.92,
     metalness: 0.0,
   });
-  const groundGeo = new THREE.PlaneGeometry(360, 360);
-  groundGeo.rotateX(-Math.PI / 2);
-  const groundMesh = new THREE.Mesh(groundGeo, groundMat);
-  groundMesh.receiveShadow = true;
-  root.add(groundMesh);
-  disposables.push(grassTex, groundMat, groundGeo);
+  // The Aurora City quadrant (west of the Kuroba border, south of Snowpeak) brings its own island
+  // base and sea, so the meadow is laid as two rectangles around it. UVs stay in world space so
+  // the grass tiling is seamless across both pieces.
+  const addGroundRect = (x0: number, x1: number, z0: number, z1: number) => {
+    const geo = new THREE.PlaneGeometry(x1 - x0, z1 - z0);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate((x0 + x1) * 0.5, 0, (z0 + z1) * 0.5);
+    const pos = geo.getAttribute('position');
+    const uv = geo.getAttribute('uv');
+    for (let i = 0; i < pos.count; i++) {
+      uv.setXY(i, (pos.getX(i) + 180) / 360, 1 - (pos.getZ(i) + 180) / 360);
+    }
+    uv.needsUpdate = true;
+    const mesh = new THREE.Mesh(geo, groundMat);
+    mesh.receiveShadow = true;
+    root.add(mesh);
+    disposables.push(geo);
+  };
+  addGroundRect(AURORA_BORDER_X, 180, -180, 180);
+  addGroundRect(-180, AURORA_BORDER_X, -180, AURORA_NORTH_Z);
+  disposables.push(groundMat);
+
+  // Aurora City style kit for Kuroba's trees, sidewalks, crosswalks & gardens (same layout)
+  const kurobaStyle = createAuroraStyleKit();
+  kurobaStyle.root.name = 'KurobaAuroraStyle';
+  kurobaStyle.root.scale.setScalar(AURORA_SCALE);
 
   // 2. OPEN-WORLD BIOME GROUND PADS & EXTENSIVE MULTI-HIGHWAY ROAD NETWORK
   buildBiomeGroundPads(root, disposables);
@@ -322,8 +357,23 @@ export function buildKurobaWorld(
     });
   });
 
-  // 12. INSTANCED LUSH FOLIAGE AROUND KUROBA CROSSING
-  buildLushFoliageAndPerimeter(root, materials, colliders, disposables);
+  // 12. LUSH FOLIAGE AROUND KUROBA CROSSING (Aurora micro-voxel trees & sakura) + STREET DRESSING
+  buildLushFoliageAndPerimeter(root, disposables, kurobaStyle);
+  dressKurobaInAuroraStyle(kurobaStyle);
+  root.add(kurobaStyle.root);
+  for (const c of kurobaStyle.finish()) {
+    colliders.push({
+      id: `kuroba_style_${colliders.length}`,
+      minX: c.minX * AURORA_SCALE,
+      maxX: c.maxX * AURORA_SCALE,
+      minY: 0,
+      maxY: c.maxY * AURORA_SCALE,
+      minZ: c.minZ * AURORA_SCALE,
+      maxZ: c.maxZ * AURORA_SCALE,
+      blocksBullets: c.blocksBullets,
+    });
+  }
+  disposables.push({ dispose: () => kurobaStyle.dispose() });
 
   // 13. SHARED VOLUMETRIC LIGHT & GROUND MIST TEXTURES + ALL 3 HIGH-DETAIL CONNECTED BIOMES
   const volTex = createVolumetricBeamTexture();
@@ -354,18 +404,7 @@ export function buildKurobaWorld(
   }
   addVolumetricGodRay(root, volumetricLights, disposables, volTex, -2, 18, -8, 6.2, 24, 0xffe4a8, 0.07, 0.18, 0.35, 0.22, -0.18);
 
-  buildAuroraCity(
-    root,
-    materials,
-    maxAnisotropy,
-    colliders,
-    cameraObstructions,
-    volumetricLights,
-    mistLayers,
-    volTex,
-    mistTex,
-    disposables,
-  );
+  const auroraCity = placeAuroraCity(root, colliders, cameraObstructions, disposables);
   buildFungiForest(
     root,
     materials,
@@ -465,9 +504,9 @@ export function buildKurobaWorld(
       id: 'veh_aurora_coupe',
       kind: 'aurora_coupe',
       name: 'Aurora Sport Coupe',
-      x: -68.0,
-      z: 13.8,
-      yaw: -Math.PI * 0.5,
+      // West Downtown Avenue (no ambient traffic on this street)
+      ...auroraLocalToWorld(-22.9, -24.0),
+      yaw: AURORA_YAW.pz,
       maxSpeed: 31,
       accel: 22,
       radius: 1.7,
@@ -475,10 +514,10 @@ export function buildKurobaWorld(
     {
       id: 'veh_aurora_interceptor',
       kind: 'aurora_coupe',
-      name: 'Neon GT Interceptor',
-      x: -102.0,
-      z: 13.8,
-      yaw: Math.PI * 0.5,
+      name: 'Harbor GT Interceptor',
+      // East Perimeter Avenue beside the village (no ambient traffic on this street)
+      ...auroraLocalToWorld(39.9, -2.0),
+      yaw: AURORA_YAW.pz,
       maxSpeed: 32,
       accel: 23,
       radius: 1.7,
@@ -520,9 +559,9 @@ export function buildKurobaWorld(
       id: 'veh_bike_aurora',
       kind: 'bike',
       name: 'Aurora Neo-Racer',
-      x: -56.0,
-      z: 14.8,
-      yaw: -Math.PI * 0.5,
+      // City Hall spine gateway, just inside the border
+      ...auroraLocalToWorld(1.2, -40.5),
+      yaw: AURORA_YAW.pz,
       maxSpeed: 35,
       accel: 26,
       radius: 1.15,
@@ -552,14 +591,10 @@ export function buildKurobaWorld(
 
   const zoneAnchors: Record<WorldZoneId, THREE.Vector3[]> = {
     kuroba: spawnPoints,
-    aurora: [
-      new THREE.Vector3(-68, 0, 13.8),
-      new THREE.Vector3(-102, 0, 13.8),
-      new THREE.Vector3(-68, 0, 56),
-      new THREE.Vector3(-102, 0, -24),
-      new THREE.Vector3(-132, 0, 35),
-      new THREE.Vector3(-85, 0, 96),
-    ],
+    aurora: auroraCity.spawnAnchors.map(([lx, lz]) => {
+      const p = auroraLocalToWorld(lx, lz);
+      return new THREE.Vector3(p.x, 0, p.z);
+    }),
     fungi: [
       new THREE.Vector3(76, 0, 13.8),
       new THREE.Vector3(122, 0, 13.8),
@@ -590,7 +625,133 @@ export function buildKurobaWorld(
     mistLayers,
     explosiveBarrels,
     disposables,
+    auroraCity,
+    kurobaStyle,
   };
+}
+
+/** Aurora City's island grass colour (shared by the open-world meadow). */
+const AURORA_GRASS = 0x3f7d3a;
+
+/**
+ * Restyles Kuroba Crossing's streets in Aurora City's micro-voxel look without moving anything:
+ * tonal grass patches, tiled sidewalks, zebra crosswalks, garden beds and Aurora street lamps.
+ * Kit coordinates are world / AURORA_SCALE.
+ */
+function dressKurobaInAuroraStyle(kit: AuroraStyleKit): void {
+  const k = (v: number) => v / AURORA_SCALE;
+  const vb = kit.vb;
+
+  // Tonal grass patches across the Kuroba heartland (flush with the ground, under roads)
+  for (let x = -46; x < 46; x += 5) {
+    for (let z = -44; z < 100; z += 5) {
+      if (kit.rand() > 0.55) {
+        vb.add(k(x + 2.5), 0.004, k(z + 2.5), kit.jitterColor(0x478c3e, 0.05), k(4.9), 0.008, k(4.9));
+      }
+    }
+  }
+
+  // Tiled sidewalks along the Grand Central highway (gaps for crossroads, boardwalk & bus stop)
+  const northRuns: Array<[number, number]> = [[-46, -29.6], [-22.4, -2.6], [2.6, 5.8], [11.0, 24.4], [31.6, 46]];
+  const southRuns: Array<[number, number]> = [[-46, -29.6], [-22.4, 24.4], [31.6, 46]];
+  for (const [x0, x1] of northRuns) kit.walkway(k(x0), k(9.2), k(x1 - x0), k(1.05), 0.02);
+  for (const [x0, x1] of southRuns) kit.walkway(k(x0), k(17.35), k(x1 - x0), k(1.1), 0.02);
+
+  // Zebra crosswalks: across the highway at the station boardwalk & both crossroads,
+  // and across the two north-south expressways
+  const white = 0xf8fafc;
+  for (const cx of [0, -33, 35]) {
+    for (let i = -3; i <= 3; i++) vb.add(k(cx) + i * 0.5, 0.045, k(13.8), white, 0.26, 0.03, k(5.8));
+  }
+  for (const nsx of [-26, 28]) {
+    for (const cz of [7.6, 20.0]) {
+      for (let i = -3; i <= 3; i++) vb.add(k(nsx), 0.045, k(cz) + i * 0.5, white, k(5.8), 0.03, 0.26);
+    }
+  }
+
+  // Low garden beds beside the station boardwalk & around the torii (walk-over height, no colliders)
+  kit.gardenBed(k(2.3), k(-5.6), k(1.2), k(4.6));
+  kit.gardenBed(k(-3.5), k(-5.6), k(1.2), k(4.6));
+  kit.gardenBed(k(2.3), k(4.2), k(1.2), k(4.8));
+  kit.gardenBed(k(-3.5), k(4.2), k(1.2), k(4.8));
+  kit.gardenBed(k(15.2), k(-8.6), k(2.0), k(1.6));
+  kit.gardenBed(k(21.4), k(-6.8), k(2.0), k(1.6));
+
+  // Aurora street lamps along the outer sidewalks
+  for (const lx of [-40, -34, 37, 43]) {
+    kit.streetLamp(k(lx), k(9.5), 0.06);
+    kit.streetLamp(k(lx), k(18.1), 0.06);
+  }
+}
+
+/**
+ * Builds the ported Aurora City diorama, places it in the western quadrant and registers its
+ * generated colliders plus invisible camera-occlusion proxies for its taller blocks.
+ */
+function placeAuroraCity(
+  root: THREE.Group,
+  colliders: ColliderBox[],
+  cameraObstructions: THREE.Object3D[],
+  disposables: Array<{ dispose: () => void }>,
+): AuroraCity {
+  const city = createAuroraCity();
+  city.root.position.set(AURORA_ORIGIN_X, 0, AURORA_ORIGIN_Z);
+  city.root.rotation.y = -Math.PI * 0.5;
+  city.root.scale.setScalar(AURORA_SCALE);
+  root.add(city.root);
+  root.updateMatrixWorld(true);
+  city.syncWorldMatrix();
+  disposables.push({ dispose: () => city.dispose() });
+
+  const proxies: Array<{ cx: number; cz: number; w: number; d: number; h: number }> = [];
+  city.colliders.forEach((c, idx) => {
+    // Local x -> world z, local z -> world -x (see auroraLocalToWorld)
+    const a = auroraLocalToWorld(c.minX, c.maxZ);
+    const b = auroraLocalToWorld(c.maxX, c.minZ);
+    const box: ColliderBox = {
+      id: `aurora_${idx}`,
+      minX: Math.min(a.x, b.x),
+      maxX: Math.max(a.x, b.x),
+      minY: 0,
+      maxY: c.maxY * AURORA_SCALE,
+      minZ: Math.min(a.z, b.z),
+      maxZ: Math.max(a.z, b.z),
+      blocksBullets: c.blocksBullets,
+    };
+    colliders.push(box);
+    if (box.maxY > 2.4 && c.blocksBullets) {
+      proxies.push({
+        cx: (box.minX + box.maxX) * 0.5,
+        cz: (box.minZ + box.maxZ) * 0.5,
+        w: box.maxX - box.minX,
+        d: box.maxZ - box.minZ,
+        h: box.maxY,
+      });
+    }
+  });
+
+  // Camera occlusion proxies: never rendered, only ray-cast by the third-person camera
+  if (proxies.length > 0) {
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    geo.translate(0, 0.5, 0);
+    const mat = new THREE.MeshBasicMaterial({ visible: false });
+    const proxyMesh = new THREE.InstancedMesh(geo, mat, proxies.length);
+    const dummy = new THREE.Object3D();
+    proxies.forEach((p, i) => {
+      dummy.position.set(p.cx, 0, p.cz);
+      dummy.scale.set(p.w, p.h, p.d);
+      dummy.updateMatrix();
+      proxyMesh.setMatrixAt(i, dummy.matrix);
+    });
+    proxyMesh.instanceMatrix.needsUpdate = true;
+    proxyMesh.computeBoundingSphere();
+    proxyMesh.name = 'AuroraCameraProxies';
+    root.add(proxyMesh);
+    cameraObstructions.push(proxyMesh);
+    disposables.push(geo, mat);
+  }
+
+  return city;
 }
 
 /**
@@ -791,21 +952,31 @@ function buildRailwayAndBoardwalk(materials: SharedVoxelMaterials): THREE.Group 
   const HAZARD_BLACK = 0x18181b;
   const SIGNAL_RED = 0xef4444;
 
-  // 1. Full continuous East-West railway line across the open world (x = -138 .. 138 at z = 2.0)
+  // 1. Continuous East-West railway line (west buffer stop at the Aurora border -> east tunnel, z = 2.0)
+  const RAIL_X0 = RAILWAY_WEST_END_X;
+  const RAIL_X1 = 138;
+  const RAIL_LEN = RAIL_X1 - RAIL_X0;
+  const RAIL_MID = (RAIL_X0 + RAIL_X1) * 0.5;
   // Continuous crushed granite ballast gravel bed
-  vb.boxBottom(0, 0.01, 2.0, 276, 0.06, 3.2, BALLAST);
+  vb.boxBottom(RAIL_MID, 0.01, 2.0, RAIL_LEN, 0.06, 3.2, BALLAST);
 
   // Wooden railroad ties / sleepers across entire span
-  for (let x = -137.5; x <= 137.5; x += 0.95) {
+  for (let x = RAIL_X0 + 0.5; x <= RAIL_X1 - 0.5; x += 0.95) {
     vb.boxBottom(x, 0.04, 2.0, 0.34, 0.1, 2.5, Math.round(x) % 2 === 0 ? TIE_WOOD : TIE_ALT);
   }
 
   // Twin continuous steel rails
-  vb.boxBottom(0, 0.1, 1.25, 276, 0.12, 0.14, RAIL_STEEL, 'metal');
-  vb.boxBottom(0, 0.1, 2.75, 276, 0.12, 0.14, RAIL_STEEL, 'metal');
+  vb.boxBottom(RAIL_MID, 0.1, 1.25, RAIL_LEN, 0.12, 0.14, RAIL_STEEL, 'metal');
+  vb.boxBottom(RAIL_MID, 0.1, 2.75, RAIL_LEN, 0.12, 0.14, RAIL_STEEL, 'metal');
   // Polished chrome rail running surface
-  vb.boxBottom(0, 0.22, 1.25, 276, 0.02, 0.08, RAIL_TOP, 'metal');
-  vb.boxBottom(0, 0.22, 2.75, 276, 0.02, 0.08, RAIL_TOP, 'metal');
+  vb.boxBottom(RAIL_MID, 0.22, 1.25, RAIL_LEN, 0.02, 0.08, RAIL_TOP, 'metal');
+  vb.boxBottom(RAIL_MID, 0.22, 2.75, RAIL_LEN, 0.02, 0.08, RAIL_TOP, 'metal');
+
+  // West terminus: hazard-striped buffer stop with red stop lamps
+  vb.boxBottom(RAIL_X0 + 0.5, 0, 2.0, 1.0, 1.1, 3.0, 0x7f1d1d, 'metal');
+  vb.boxBottom(RAIL_X0 + 0.5, 0.75, 2.0, 1.05, 0.22, 3.05, HAZARD_YELLOW);
+  vb.boxBottom(RAIL_X0 + 0.5, 1.1, 0.75, 0.28, 0.28, 0.28, SIGNAL_RED, 'emissive');
+  vb.boxBottom(RAIL_X0 + 0.5, 1.1, 3.25, 0.28, 0.28, 0.28, SIGNAL_RED, 'emissive');
 
   // 2. North-South wooden boardwalk connecting station veranda (z = -6.3) across tracks to south road (z = 10.6)
   for (let z = -6.2; z <= 10.4; z += 0.68) {
@@ -817,8 +988,8 @@ function buildRailwayAndBoardwalk(materials: SharedVoxelMaterials): THREE.Group 
   // Crossing timber planks flush between rails at pedestrian boardwalk
   vb.boxBottom(0, 0.06, 2.0, 4.2, 0.16, 1.35, BOARDWALK);
 
-  // 3. Flush asphalt/rubber crossing pads where roads cross the railway (x = -68, -26, 28, 76)
-  const roadCrossings = [-68, -26, 28, 76];
+  // 3. Flush asphalt/rubber crossing pads where roads cross the railway (x = -26, 28, 76)
+  const roadCrossings = [-26, 28, 76];
   for (const rx of roadCrossings) {
     // Flush asphalt pad between and beside rails for smooth driving
     vb.boxBottom(rx, 0.04, 2.0, 6.8, 0.14, 1.35, 0x272b30);
@@ -846,8 +1017,8 @@ function buildRailwayAndBoardwalk(materials: SharedVoxelMaterials): THREE.Group 
     }
   }
 
-  // 4. Mountain tunnel portals at eastern and western borders (x = -138, x = 138)
-  for (const tx of [-137.5, 137.5]) {
+  // 4. Mountain tunnel portal at the eastern border (x = 138)
+  for (const tx of [137.5]) {
     const isWest = tx < 0;
     // Heavy reinforced stone/concrete tunnel arch mouth
     vb.boxBottom(tx, 0, 2.0, 3.5, 5.2, 5.6, 0x374151);
@@ -1089,9 +1260,8 @@ function buildCrateCoverCluster(materials: SharedVoxelMaterials, variant: number
  */
 function buildLushFoliageAndPerimeter(
   root: THREE.Group,
-  materials: SharedVoxelMaterials,
-  colliders: ColliderBox[],
   disposables: Array<{ dispose: () => void }>,
+  kit: AuroraStyleKit,
 ): void {
   const _dummy = new THREE.Object3D();
   const _color = new THREE.Color();
@@ -1129,82 +1299,27 @@ function buildLushFoliageAndPerimeter(
     treeCoords.push([tx, tz, 1.15 + rand() * 0.65]);
   }
 
-  // Instanced trunks + 5 asymmetric multi-cluster voxel foliage canopies (organic MagicaVoxel look!)
-  const trunkGeo = new THREE.BoxGeometry(0.62, 2.35, 0.62);
-  trunkGeo.translate(0, 1.18, 0);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x543822, roughness: 0.9 });
-
-  const crown1Geo = new THREE.BoxGeometry(2.4, 1.25, 2.4);
-  crown1Geo.translate(0, 2.6, 0);
-  const crown2Geo = new THREE.BoxGeometry(1.7, 1.15, 1.7);
-  crown2Geo.translate(0.55, 3.25, 0.45);
-  const crown3Geo = new THREE.BoxGeometry(1.65, 1.1, 1.65);
-  crown3Geo.translate(-0.55, 3.35, -0.4);
-  const crown4Geo = new THREE.BoxGeometry(1.45, 0.95, 1.45);
-  crown4Geo.translate(0.05, 4.2, -0.05);
-  const foliageMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86 });
-
-  const count = treeCoords.length;
-  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
-  const c1 = new THREE.InstancedMesh(crown1Geo, foliageMat, count);
-  const c2 = new THREE.InstancedMesh(crown2Geo, foliageMat, count);
-  const c3 = new THREE.InstancedMesh(crown3Geo, foliageMat, count);
-  const c4 = new THREE.InstancedMesh(crown4Geo, foliageMat, count);
-
-  trunks.castShadow = true;
-  trunks.receiveShadow = true;
-  c1.castShadow = true;
-  c1.receiveShadow = true;
-  c2.castShadow = true;
-  c2.receiveShadow = true;
-  c3.castShadow = true;
-  c3.receiveShadow = true;
-  c4.castShadow = true;
-
-  const greens1 = [0x2a5625, 0x33622a, 0x264e22, 0x3b6a2e];
-  const greens2 = [0x3c6f2f, 0x477d34, 0x35662b, 0x4f8439];
-  const greens3 = [0x4c8437, 0x58913d, 0x447a32, 0x629b42];
-  const greens4 = [0x659e43, 0x73ab4b, 0x5c943e, 0x80b553];
-
+  // Aurora City micro-voxel trees (wind-swayed canopies) at the same spots as before: sakura flank
+  // the station, lush broadleaf trees frame the crossing, and the grove ring mixes in pines.
+  // Trunk colliders are generated by the style kit.
+  const k = (v: number) => v / AURORA_SCALE;
+  const petalSources: Array<{ x: number; y: number; z: number; r: number; count: number }> = [];
   treeCoords.forEach(([tx, tz, s], idx) => {
-    const rotY = Math.floor(rand() * 4) * (Math.PI * 0.5);
-    _dummy.position.set(tx, 0, tz);
-    _dummy.rotation.set(0, rotY, 0);
-    _dummy.scale.set(s, s * (0.9 + rand() * 0.25), s);
-    _dummy.updateMatrix();
-    trunks.setMatrixAt(idx, _dummy.matrix);
-    c1.setMatrixAt(idx, _dummy.matrix);
-    c2.setMatrixAt(idx, _dummy.matrix);
-    c3.setMatrixAt(idx, _dummy.matrix);
-    c4.setMatrixAt(idx, _dummy.matrix);
-
-    c1.setColorAt(idx, _color.setHex(greens1[idx % greens1.length]));
-    c2.setColorAt(idx, _color.setHex(greens2[idx % greens2.length]));
-    c3.setColorAt(idx, _color.setHex(greens3[idx % greens3.length]));
-    c4.setColorAt(idx, _color.setHex(greens4[idx % greens4.length]));
-
-    // Only inner playable-zone trees need colliders
-    if (Math.abs(tx) < 30 && Math.abs(tz) < 30) {
-      colliders.push({
-        id: `tree_${idx}`,
-        minX: tx - 0.55 * s,
-        maxX: tx + 0.55 * s,
-        minY: 0,
-        maxY: 4.5,
-        minZ: tz - 0.55 * s,
-        maxZ: tz + 0.55 * s,
-        blocksBullets: true,
-      });
+    const ks = s * 1.15;
+    if (idx < 4) {
+      kit.sakuraTree(k(tx), k(tz), ks);
+      petalSources.push({ x: k(tx), y: 2.9 * ks, z: k(tz), r: 4.4, count: 46 });
+    } else if (idx < 8) {
+      kit.lushTree(k(tx), k(tz), ks);
+    } else if (idx % 3 === 0) {
+      kit.pineTree(k(tx), k(tz), ks * 1.05);
+    } else if (idx % 7 === 0) {
+      kit.sakuraTree(k(tx), k(tz), ks * 0.95);
+    } else {
+      kit.villageTree(k(tx), k(tz), ks);
     }
   });
-
-  [trunks, c1, c2, c3, c4].forEach((im) => {
-    im.instanceMatrix.needsUpdate = true;
-    if (im.instanceColor) im.instanceColor.needsUpdate = true;
-    im.computeBoundingSphere();
-    root.add(im);
-  });
-  disposables.push(trunkGeo, trunkMat, crown1Geo, crown2Geo, crown3Geo, crown4Geo, foliageMat);
+  kit.petals(petalSources);
 
   // B. Distant Open-World Perimeter Mountains (at radius 158..178 outside all 4 zones!)
   const hillBaseGeo = new THREE.BoxGeometry(26, 6.5, 22);
@@ -1223,6 +1338,10 @@ function buildLushFoliageAndPerimeter(
     _dummy.position.set(hx, -0.2, hz);
     _dummy.rotation.set(0, angle + 0.3, 0);
     _dummy.scale.set(1.25 + rand() * 0.7, 0.95 + rand() * 1.1, 1.1 + rand() * 0.6);
+    // Aurora City's quadrant is city + open western sea: no perimeter hills there
+    if (isInAuroraFootprint(hx, hz)) {
+      _dummy.scale.setScalar(0);
+    }
     _dummy.updateMatrix();
     hillsBase.setMatrixAt(i, _dummy.matrix);
     hillsTop.setMatrixAt(i, _dummy.matrix);
@@ -1342,8 +1461,7 @@ function buildBiomeGroundPads(
     disposables.push(geo, mat);
   };
 
-  // Aurora City urban slate concrete district (West: x = -152..-46, z = -44..148)
-  addPad(-99, 52, 106, 192, 0x252c38, 0.86);
+  // (Aurora City in the west brings its own island base — see placeAuroraCity)
   // Fungi Forest mossy bioluminescent loam (East: x = 46..152, z = -44..148)
   addPad(99, 52, 106, 192, 0x224a3c, 0.94);
   // Kopenhime Snowpeak alpine snow plateau (North: x = -154..154, z = -152..-44)
@@ -1409,15 +1527,15 @@ function buildOpenWorldRoadNetwork(
   };
 
   // === EAST-WEST HIGHWAYS & AVENUES ===
+  // Aurora City (west of AURORA_BORDER_X) has its own street grid; these roads hand over to it
+  // at the border: the highway joins the City Hall spine, the beltway joins Outskirts Avenue A.
   // 1. Grand Central East-West Highway (Aurora City <-> Kuroba Crossing <-> Fungi Forest!)
-  addRoadEW(-138, 138, 13.8, 6.2);
-  // 2. South Scenic Beltway connecting Aurora South <-> Kuroba South <-> Fungi South
-  addRoadEW(-136, 130, 96, 6.2);
-  // 3. Mid-South Cross Boulevard (Aurora & Fungi connector)
-  addRoadEW(-136, -24, 56, 5.8);
+  addRoadEW(AURORA_BORDER_X, 138, 13.8, 6.2);
+  // 2. South Scenic Beltway connecting Aurora Outskirts <-> Kuroba South <-> Fungi South
+  addRoadEW(AURORA_BORDER_X, 130, 96, 6.2);
+  // 3. Mid-South Cross Boulevard (Fungi connector)
   addRoadEW(26, 128, 56, 5.8);
-  // 4. North Cross-Streets in Aurora City & Fungi Forest
-  addRoadEW(-136, -24, -24, 5.8);
+  // 4. North Cross-Street in Fungi Forest
   addRoadEW(26, 128, -24, 5.8);
   // 5. Kopenhime Snowpeak Alpine Highways (3 scenic snowy mountain passes!)
   addRoadEW(-126, 126, -66, 6.2);
@@ -1429,10 +1547,10 @@ function buildOpenWorldRoadNetwork(
   addRoadNS(-26, -136, 100, 6.2);
   // 2. East Fungi-to-Snowpeak Arterial
   addRoadNS(28, -136, 100, 6.0);
-  // 3. Aurora City Urban Avenue Grid (3 wide N-S avenues!)
-  addRoadNS(-68, -136, 100, 6.0);
-  addRoadNS(-102, -136, 100, 5.8);
-  addRoadNS(-132, -136, 100, 5.8);
+  // 3. Western Snowpeak avenues (end at Aurora City's northern edge)
+  addRoadNS(-68, -136, AURORA_NORTH_Z, 6.0);
+  addRoadNS(-102, -136, AURORA_NORTH_Z, 5.8);
+  addRoadNS(-132, -136, AURORA_NORTH_Z, 5.8);
   // 4. Fungi Forest Paved Scenic Loop Avenues
   addRoadNS(76, -136, 100, 6.0);
   addRoadNS(122, -136, 100, 5.8);
@@ -1443,17 +1561,19 @@ function buildOpenWorldRoadNetwork(
   disposables.push(padGeo);
   const xs = [-132, -102, -68, -26, 28, 76, 122];
   const zs = [-134, -104, -66, -24, 13.8, 56, 96];
-  const padCount = xs.length * zs.length;
-  const pads = new THREE.InstancedMesh(padGeo, padMat, padCount);
-  const _d = new THREE.Object3D();
-  let pIdx = 0;
+  const padSpots: Array<[number, number]> = [];
   for (const ix of xs) {
     for (const iz of zs) {
-      _d.position.set(ix, 0.036, iz);
-      _d.updateMatrix();
-      pads.setMatrixAt(pIdx++, _d.matrix);
+      if (!isInAuroraFootprint(ix, iz)) padSpots.push([ix, iz]);
     }
   }
+  const pads = new THREE.InstancedMesh(padGeo, padMat, padSpots.length);
+  const _d = new THREE.Object3D();
+  padSpots.forEach(([ix, iz], pIdx) => {
+    _d.position.set(ix, 0.036, iz);
+    _d.updateMatrix();
+    pads.setMatrixAt(pIdx, _d.matrix);
+  });
   pads.instanceMatrix.needsUpdate = true;
   pads.receiveShadow = true;
   root.add(pads);
@@ -1496,7 +1616,8 @@ function buildOpenWorldRoadNetwork(
     root.add(g);
   };
 
-  addHighwayArch(-46, 13.8, Math.PI * 0.5, 'AURORA CITY →', '#102438', '#45f2ff', 0x45f2ff);
+  addHighwayArch(AURORA_BORDER_X + 2.5, 13.8, Math.PI * 0.5, 'AURORA CITY →', '#102438', '#45f2ff', 0x45f2ff);
+  addHighwayArch(AURORA_BORDER_X + 2.5, 96, Math.PI * 0.5, 'AURORA OUTSKIRTS →', '#14301f', '#bef264', 0x84cc16);
   addHighwayArch(46, 13.8, -Math.PI * 0.5, 'FUNGI FOREST →', '#153324', '#a3ff5c', 0x9eff3b);
   addHighwayArch(-26, -46, 0, '↑ KOPENHIME SNOWPEAK', '#1d3247', '#d9f4ff', 0x7cc4ff);
 }
@@ -1705,11 +1826,16 @@ function buildExplosiveBarrels(
     [-9.5, 10.2],
     [14.2, -3.5],
     [-15.2, 6.2],
-    // Aurora City neon intersections
-    [-61.5, 10.2],
-    [-74.5, 17.5],
-    [-95.5, 10.2],
-    [-108.5, 49.5],
+    // Aurora City roadside spots (gateway, boulevard, harbor spine, outskirts avenue)
+    ...([
+      [3.6, -39.0],
+      [-6.2, 22.5],
+      [6.0, 27.0],
+      [68.3, -8.0],
+    ] as Array<[number, number]>).map(([lx, lz]): [number, number] => {
+      const p = auroraLocalToWorld(lx, lz);
+      return [p.x, p.z];
+    }),
     // Fungi Forest highway corners & pagoda plaza
     [69.5, 10.2],
     [82.5, 17.5],
@@ -1744,229 +1870,6 @@ function buildExplosiveBarrels(
       respawnTimer: 0,
     });
   });
-}
-
-/**
- * WEST REGION: AURORA CITY — Dense Cyberpunk-Japanese Neon Metropolis!
- * Features multi-tier skyscrapers with rooftop AC/helipads/water-towers, street-level Ramen/Izakaya
- * voxel shops with glowing striped awnings, a multi-level Cyber Parking Deck, elevated Monorail Viaduct
- * with solid support piers, glowing vending kiosks, urban voxel street trees, neon crosswalks,
- * volumetric cyan/magenta lamp cones & sky-spotlights, and drifting cyber street mist.
- */
-function buildAuroraCity(
-  root: THREE.Group,
-  materials: SharedVoxelMaterials,
-  maxAnisotropy: number,
-  colliders: ColliderBox[],
-  cameraObstructions: THREE.Object3D[],
-  volumetricLights: VolumetricLightItem[],
-  mistLayers: MistLayerItem[],
-  volTex: THREE.CanvasTexture,
-  mistTex: THREE.CanvasTexture,
-  disposables: Array<{ dispose: () => void }>,
-): void {
-  const vb = new VoxelAssembler();
-  const group = new THREE.Group();
-
-  const registerBox = (id: string, cx: number, cz: number, w: number, h: number, d: number) => {
-    colliders.push({
-      id,
-      minX: cx - w * 0.5,
-      maxX: cx + w * 0.5,
-      minY: 0,
-      maxY: h,
-      minZ: cz - d * 0.5,
-      maxZ: cz + d * 0.5,
-      blocksBullets: true,
-    });
-  };
-
-  // 1. Monumental Cyberpunk Skyscrapers with detailed podiums, awnings, rooftop AC & vertical neon fins
-  const towers: Array<{ x: number; z: number; w: number; d: number; h: number; body: number; neon: number; altNeon: number }> = [
-    { x: -85, z: -5, w: 16, d: 18, h: 25, body: 0x1c2536, neon: 0x38e8ff, altNeon: 0xff4fd8 },
-    { x: -117, z: -5, w: 15, d: 18, h: 32, body: 0x222038, neon: 0xff4fd8, altNeon: 0x45f2ff },
-    { x: -50, z: -5, w: 13, d: 15, h: 17, body: 0x243040, neon: 0x4ef2a1, altNeon: 0xffc845 },
-    { x: -85, z: 35, w: 16, d: 19, h: 29, body: 0x1e2233, neon: 0xff4fd8, altNeon: 0x45f2ff },
-    { x: -117, z: 35, w: 16, d: 19, h: 36, body: 0x19283b, neon: 0x45f2ff, altNeon: 0xffae34 },
-    { x: -50, z: 35, w: 13, d: 17, h: 19, body: 0x28303d, neon: 0xffc845, altNeon: 0x38e8ff },
-    { x: -85, z: 76, w: 16, d: 18, h: 23, body: 0x222938, neon: 0x45f2ff, altNeon: 0xc45cff },
-    { x: -117, z: 76, w: 15, d: 18, h: 28, body: 0x261d36, neon: 0xc45cff, altNeon: 0x4ef2a1 },
-    { x: -50, z: 76, w: 13, d: 15, h: 15, body: 0x242c38, neon: 0xff6e40, altNeon: 0x45f2ff },
-    { x: -85, z: -36, w: 15, d: 11, h: 19, body: 0x1c2638, neon: 0x45f2ff, altNeon: 0xff4fd8 },
-    { x: -117, z: -36, w: 15, d: 11, h: 24, body: 0x241e38, neon: 0xff4fd8, altNeon: 0x45f2ff },
-  ];
-
-  for (let i = 0; i < towers.length; i++) {
-    const t = towers[i];
-    // Raised concrete sidewalk plaza curb
-    vb.boxBottom(t.x, 0, t.z, t.w + 2.8, 0.24, t.d + 2.8, 0x38414f);
-    // Ground-floor commercial storefront podium with glowing display windows
-    vb.boxBottom(t.x, 0.24, t.z, t.w, 4.2, t.d, 0x161b26, 'metal');
-    vb.boxBottom(t.x, 1.0, t.z + t.d * 0.5 + 0.06, t.w - 3.6, 2.3, 0.2, 0xffd27a, 'emissive');
-    vb.boxBottom(t.x, 1.0, t.z - t.d * 0.5 - 0.06, t.w - 3.6, 2.3, 0.2, t.neon, 'emissive');
-    // Awning overhang above storefront
-    vb.boxBottom(t.x, 3.6, t.z + t.d * 0.5 + 0.7, t.w - 2.2, 0.32, 1.4, t.altNeon);
-    vb.boxBottom(t.x, 3.6, t.z - t.d * 0.5 - 0.7, t.w - 2.2, 0.32, 1.4, t.neon);
-
-    // Main skyscraper stepped shaft
-    vb.boxBottom(t.x, 4.44, t.z, t.w - 1.4, t.h - 4.44, t.d - 1.4, t.body, 'metal');
-    // Vertical glowing cyber sign fin jutting off street-facing corner
-    vb.boxBottom(t.x + t.w * 0.5 + 0.35, 5.2, t.z + t.d * 0.25, 0.45, Math.min(11, t.h - 7), 1.6, 0x151a24, 'metal');
-    vb.boxBottom(t.x + t.w * 0.5 + 0.62, 5.8, t.z + t.d * 0.25, 0.16, Math.min(9.5, t.h - 8), 1.2, t.altNeon, 'emissive');
-
-    // Rooftop parapet, AC chiller units, water tower & glowing neon crown
-    vb.boxBottom(t.x, t.h, t.z, t.w - 2.2, 1.35, t.d - 2.2, 0x141922, 'metal');
-    vb.boxBottom(t.x, t.h + 1.35, t.z, t.w - 1.8, 0.48, t.d - 1.8, t.neon, 'emissive');
-    vb.boxBottom(t.x - 2.8, t.h + 1.8, t.z - 2.4, 2.6, 1.5, 2.2, 0x5c6675, 'metal');
-    vb.boxBottom(t.x + 2.8, t.h + 1.8, t.z + 2.2, 1.8, 2.2, 1.8, 0x424d5c, 'metal');
-
-    // Horizontal illuminated office window ribbons on every 4.2m floor
-    for (let y = 5.6; y < t.h - 1.8; y += 4.2) {
-      vb.boxBottom(t.x, y, t.z + (t.d - 1.2) * 0.5, t.w - 2.8, 0.92, 0.24, t.neon, 'emissive');
-      vb.boxBottom(t.x, y, t.z - (t.d - 1.2) * 0.5, t.w - 2.8, 0.92, 0.24, t.neon, 'emissive');
-      vb.boxBottom(t.x + (t.w - 1.2) * 0.5, y, t.z, 0.24, 0.92, t.d - 2.8, t.neon, 'emissive');
-      vb.boxBottom(t.x - (t.w - 1.2) * 0.5, y, t.z, 0.24, 0.92, t.d - 2.8, t.neon, 'emissive');
-    }
-
-    // Tall spire + pulsing aviation beacon
-    vb.boxBottom(t.x, t.h + 1.85, t.z, 0.45, 6.0, 0.45, 0x626e7d, 'metal');
-    vb.boxBottom(t.x, t.h + 7.85, t.z, 0.65, 0.65, 0.65, t.altNeon, 'emissive');
-
-    registerBox(`aurora_tower_${i}`, t.x, t.z, t.w + 0.4, t.h + 2, t.d + 0.4);
-  }
-
-  // 2. Traditional-Meets-Cyber Street-Level Voxel Shops (Ramen Izakayas, Arcade Booths, Cyber Konbini)
-  const lowShops: Array<{ x: number; z: number; w: number; d: number; h: number; wall: number; awning: number; glow: number }> = [
-    { x: -50, z: 112, w: 12, d: 10, h: 7.2, wall: 0x543828, awning: 0xd93838, glow: 0xffc864 }, // Ramen Izakaya
-    { x: -85, z: 112, w: 14, d: 11, h: 8.5, wall: 0x26344a, awning: 0x38e8ff, glow: 0x45f2ff }, // Cyber Konbini
-    { x: -117, z: 112, w: 13, d: 10, h: 9.2, wall: 0x332445, awning: 0xff4fd8, glow: 0xff82e4 }, // Neon Pachinko Arcade
-    { x: -144, z: -5, w: 9, d: 16, h: 14.0, wall: 0x1e2c3e, awning: 0x4ef2a1, glow: 0x4ef2a1 }, // West Arcade Annex
-    { x: -144, z: 35, w: 9, d: 16, h: 16.0, wall: 0x28203b, awning: 0xffc845, glow: 0xffc845 }, // West Cyber Hotel
-    { x: -144, z: 76, w: 9, d: 16, h: 12.0, wall: 0x243342, awning: 0x38e8ff, glow: 0x38e8ff }, // West Tech Depot
-    { x: -50, z: -36, w: 11, d: 9, h: 8.4, wall: 0x3b2c24, awning: 0xff7d3b, glow: 0xffcf70 }, // Crossing Gate Ramen House
-  ];
-  lowShops.forEach((s, idx) => {
-    vb.boxBottom(s.x, 0, s.z, s.w + 1.6, 0.24, s.d + 1.6, 0x3b4452);
-    vb.boxBottom(s.x, 0.24, s.z, s.w, s.h, s.d, s.wall);
-    // Warm glowing storefronts & upstairs windows
-    vb.boxBottom(s.x, 0.9, s.z + s.d * 0.5 + 0.08, s.w - 2.4, 2.2, 0.2, s.glow, 'emissive');
-    vb.boxBottom(s.x, 0.9, s.z - s.d * 0.5 - 0.08, s.w - 2.4, 2.2, 0.2, s.glow, 'emissive');
-    vb.boxBottom(s.x, 3.4, s.z + s.d * 0.5 + 0.75, s.w - 1.2, 0.42, 1.5, s.awning);
-    vb.boxBottom(s.x, 4.6, s.z + s.d * 0.5 + 0.08, s.w - 3.2, 1.4, 0.2, 0xffe49e, 'emissive');
-    // Stepped Japanese voxel roof + glowing rooftop sign box
-    vb.boxBottom(s.x, s.h + 0.24, s.z, s.w + 1.2, 0.55, s.d + 1.2, 0x242a32, 'metal');
-    vb.boxBottom(s.x, s.h + 0.79, s.z, s.w - 1.4, 0.65, s.d - 1.4, 0x2f3742, 'metal');
-    vb.boxBottom(s.x, s.h + 1.44, s.z + s.d * 0.3, s.w * 0.65, 1.35, 0.5, s.glow, 'emissive');
-    registerBox(`aurora_shop_${idx}`, s.x, s.z, s.w + 0.4, s.h + 1.5, s.d + 0.4);
-  });
-
-  // 3. Elevated Monorail Viaduct running N-S over Aurora Avenue (x = -102, y = 9.4m) + Solid Pier Colliders
-  vb.boxBottom(-102, 9.2, 32, 3.6, 1.35, 168, 0x263140, 'metal');
-  vb.boxBottom(-102, 9.8, 32, 3.85, 0.32, 168, 0x38e8ff, 'emissive');
-  // Sleek parked cyberpunk voxel monorail train car overhead!
-  vb.boxBottom(-102, 10.6, 16, 3.1, 2.5, 22, 0xe8eff5, 'metal');
-  vb.boxBottom(-102, 11.4, 16, 3.22, 0.72, 19.5, 0x45f2ff, 'emissive');
-  vb.boxBottom(-102, 11.2, 27.1, 2.6, 0.9, 0.25, 0xff4fd8, 'emissive');
-  // Monorail concrete piers neatly tucked off intersections (z = -38, -6, 34, 74, 110) on the sidewalk edge
-  for (const pz of [-38, -6, 34, 74, 110]) {
-    vb.boxBottom(-97.2, 0, pz, 1.35, 9.4, 1.35, 0x3b4452, 'metal');
-    vb.boxBottom(-99.6, 8.2, pz, 5.8, 1.1, 1.35, 0x2d3540, 'metal');
-    registerBox(`monorail_pier_${pz}`, -97.2, pz, 1.5, 9.4, 1.5);
-  }
-
-  // 4. Dual Cyberpunk Neon Skybridges spanning Aurora Grand Highway
-  vb.boxBottom(-85, 8.4, 13.8, 4.4, 1.5, 15.0, 0x1b2638, 'metal');
-  vb.boxBottom(-85, 8.9, 13.8, 4.65, 0.42, 14.5, 0x38e8ff, 'emissive');
-  vb.boxBottom(-117, 9.4, 13.8, 4.4, 1.5, 15.0, 0x261d38, 'metal');
-  vb.boxBottom(-117, 9.9, 13.8, 4.65, 0.42, 14.5, 0xff4fd8, 'emissive');
-
-  // 5. Street-Level Urban Detail: Neon Streetlamps, Glowing Vending Machines, Sidewalk Planters & Crosswalks
-  for (let lx = -126; lx <= -54; lx += 18) {
-    for (const lz of [9.4, 18.2]) {
-      const isCyan = (Math.abs(lx) / 18) % 2 === 0;
-      const lampHex = isCyan ? 0x45f2ff : 0xff5ce6;
-      vb.boxBottom(lx, 0, lz, 0.28, 5.4, 0.28, 0x2d3848, 'metal');
-      vb.boxBottom(lx, 5.2, lz + (lz > 13.8 ? -0.65 : 0.65), 0.38, 0.26, 1.25, lampHex, 'emissive');
-      addVolumetricCone(
-        root,
-        volumetricLights,
-        disposables,
-        volTex,
-        lx,
-        5.2,
-        lz + (lz > 13.8 ? -0.65 : 0.65),
-        2.25,
-        5.4,
-        lampHex,
-        0.26,
-        0.16,
-        1.0,
-      );
-    }
-    // Glowing sidewalk vending machines & planters alternating between lamps
-    if (lx < -58 && Math.abs(lx + 68) > 5 && Math.abs(lx + 102) > 5) {
-      vb.boxBottom(lx + 7, 0.04, 8.2, 1.35, 2.2, 0.9, 0x1c3d5c, 'metal');
-      vb.boxBottom(lx + 7, 0.8, 8.7, 1.05, 1.05, 0.1, 0x45f2ff, 'emissive');
-      registerBox(`aurora_vend_${lx}`, lx + 7, 8.2, 1.45, 2.2, 1.0);
-
-      // Urban voxel tree planter box
-      vb.boxBottom(lx + 11, 0.04, 19.2, 1.9, 0.55, 1.9, 0x485260);
-      vb.boxBottom(lx + 11, 0.59, 19.2, 0.4, 2.1, 0.4, 0x4f3422);
-      vb.boxBottom(lx + 11, 2.5, 19.2, 1.8, 1.5, 1.8, 0x2e6e58);
-      vb.boxBottom(lx + 11, 3.6, 19.2, 1.2, 0.9, 1.2, 0x429478);
-    }
-  }
-
-  // Glowing neon zebra crosswalks at Aurora major intersections
-  for (const ix of [-68, -102]) {
-    for (let s = -2.0; s <= 2.0; s += 1.0) {
-      vb.boxBottom(ix - 4.4, 0.045, 13.8 + s, 1.8, 0.03, 0.42, 0xe8f4ff);
-      vb.boxBottom(ix + 4.4, 0.045, 13.8 + s, 1.8, 0.03, 0.42, 0xe8f4ff);
-    }
-  }
-
-  group.add(vb.build(materials));
-
-  // 6. Dual Neon Rooftop Billboards facing Kuroba Highway & South Avenue
-  const makeBillboard = (
-    text: string,
-    bg: string,
-    fg: string,
-    emissiveHex: number,
-    bx: number,
-    by: number,
-    bz: number,
-    rotY: number,
-  ) => {
-    const tex = createShopSignTexture(text, bg, fg, true, maxAnisotropy);
-    const mat = new THREE.MeshStandardMaterial({
-      map: tex,
-      emissive: emissiveHex,
-      emissiveMap: tex,
-      emissiveIntensity: 1.15,
-      roughness: 0.25,
-    });
-    const geo = new THREE.BoxGeometry(10.5, 3.0, 0.4);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(bx, by, bz);
-    mesh.rotation.y = rotY;
-    group.add(mesh);
-    disposables.push(tex, mat, geo);
-  };
-  makeBillboard('オーロラ市 · AURORA', '#16112e', '#45f2ff', 0x45f2ff, -85, 11.6, 13.8, Math.PI * 0.5);
-  makeBillboard('CYBER RAMEN · 24H', '#290d26', '#ff70e0', 0xff4fd8, -117, 12.6, 13.8, Math.PI * 0.5);
-
-  // 7. Cinematic Volumetric Rooftop Sky-Spotlights & Drifting Neon Street Mist
-  addVolumetricGodRay(root, volumetricLights, disposables, volTex, -85, 38, -5, 5.2, 34, 0x38e8ff, 0.16, 0.22, 1.0, 0.2, 0.25);
-  addVolumetricGodRay(root, volumetricLights, disposables, volTex, -117, 42, 35, 5.8, 38, 0xff4fd8, 0.16, 0.22, 1.0, -0.18, 0.22);
-  addVolumetricGodRay(root, volumetricLights, disposables, volTex, -68, 28, 56, 4.8, 28, 0x4ef2a1, 0.14, 0.2, 1.0, 0.16, -0.2);
-
-  addGroundMistLayer(root, mistLayers, disposables, mistTex, -78, 0.42, 14, 46, 36, 0x38b8ff, 0.08, 0.22, 0.28);
-  addGroundMistLayer(root, mistLayers, disposables, mistTex, -114, 0.48, 36, 48, 42, 0xd85cff, 0.08, 0.2, 0.22);
-  addGroundMistLayer(root, mistLayers, disposables, mistTex, -88, 0.42, 76, 44, 36, 0x45f2ff, 0.07, 0.18, 0.25);
-
-  cameraObstructions.push(group);
-  root.add(group);
 }
 
 /**

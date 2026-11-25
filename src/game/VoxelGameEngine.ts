@@ -60,6 +60,7 @@ import {
   PLAYER_MAX_HP,
   PLAYER_RADIUS,
   pointHitsBox,
+  queryNearbyColliders,
   resolveCylinderWorldCollision,
   resolvePlayerVehicleCollision,
   resolveVehiclePairCollision,
@@ -94,10 +95,41 @@ import type {
   WeaponId,
   WeaponRuntimeState,
   WorldZoneId,
+  FirearmId,
+  GunBuild,
+  GunBuilds,
+  ScopeHudState,
+  UnlockToast,
+  WeaponSpec,
 } from './types';
 import { multiplayer, type RemotePlayerState, type PlayerTeam, type KillFeedEntry } from './multiplayer';
 import { VoxelAssembler, createSharedVoxelMaterials, type SharedVoxelMaterials } from './voxelBuilder';
-import { buildKurobaWorld, type BuiltWorld, type ExplosiveBarrelItem } from './worldBuilder';
+import { auroraLocalToWorld } from './aurora/auroraLayout';
+import {
+  cloneBuilds,
+  FIREARMS,
+  loadGunBuilds,
+  type ResolvedGun,
+  resolveGun,
+  sanitizeBuild,
+  saveGunBuilds,
+} from './armory';
+import {
+  awardKill,
+  loadProgression,
+  playerLevelInfo,
+  type ProgressionState,
+  saveProgression,
+  weaponLevelInfo,
+  weaponLevels,
+} from './progression';
+import { applyWeaponOverrides, BASE_WEAPONS } from './rules';
+import {
+  buildKurobaWorld,
+  RAILWAY_WEST_END_X,
+  type BuiltWorld,
+  type ExplosiveBarrelItem,
+} from './worldBuilder';
 
 const BEST_SCORE_STORAGE_KEY = 'kuroba_crossing_best_score_v1';
 const MAX_PARTICLES = 480;
@@ -344,6 +376,9 @@ const _lookGoal = new THREE.Vector3();
 const _rayOrigin = new THREE.Vector3();
 const _rayDir = new THREE.Vector3();
 const _aimPoint = new THREE.Vector3();
+const _auroraPlayerPos = new THREE.Vector3();
+/** Type-90 parking spot: Aurora City's North Loop Road, nose pointing along the road. */
+const TANK_PARK = { ...auroraLocalToWorld(14, -35), yaw: 0 };
 const _muzzlePos = new THREE.Vector3();
 const _ejectPos = new THREE.Vector3();
 const _dummy = new THREE.Object3D();
@@ -379,14 +414,27 @@ export class VoxelGameEngine {
   private zoneBannerTimer = 0;
   private loadout: LoadoutConfig = loadSavedLoadout();
   private loadoutMods: LoadoutCombatModifiers = computeLoadoutModifiers(this.loadout);
-  private customizeTab: 'character' | 'gun' = 'character';
+  private customizeTab: 'character' | 'face' | 'gun' = 'character';
+  // Armory & progression (per-gun builds, play-to-unlock levels)
+  private progression: ProgressionState = loadProgression();
+  private gunBuilds: GunBuilds = loadGunBuilds();
+  private resolvedGuns: Record<FirearmId, ResolvedGun> = this.resolveArmory();
+  private unlockToasts: UnlockToast[] = [];
+  private unlockToastSeq = 0;
+  // Scope / ADS presentation
+  private scopeBlend = 0;
+  private scopeFullscreen = false;
+  private scopeZoomByOptic: Record<string, number> = {};
+  private scopeRangeM: number | null = null;
+  private scopeSwayClock = 0;
+  private thermalActive = false;
+  // Operator face animation
+  private blinkTimer = 2.4;
+  private blinkHold = 0;
   private customizeOrbitYaw = 0.28;
   private customizeDragging = false;
   private player: PlayerKinematicsState = createInitialPlayerState();
-  private weapon: WeaponRuntimeState = createInitialWeaponState(
-    this.loadoutMods.magMult,
-    this.loadoutMods.reloadMult,
-  );
+  private weapon: WeaponRuntimeState = createInitialWeaponState(1, 1);
   private playerHp = PLAYER_MAX_HP;
   private ghostHp = PLAYER_MAX_HP;
   private score = 0;
@@ -754,7 +802,7 @@ export class VoxelGameEngine {
     this.world = buildKurobaWorld(this.materials, maxAniso);
     this.scene.add(this.world.root);
 
-    this.hero = buildHeroRig(this.materials, this.loadout);
+    this.hero = buildHeroRig(this.materials, this.loadout, this.gunBuilds);
     this.hero.root.position.set(this.player.x, this.player.y, this.player.z);
     this.hero.root.rotation.y = this.player.facingYaw;
     this.scene.add(this.hero.root);
@@ -883,13 +931,15 @@ export class VoxelGameEngine {
     } else {
       this.scene.background = new THREE.Color(fogHex);
       this.scene.fog = new THREE.FogExp2(fogHex, isCustomize ? 0.0025 : dayFogDensity);
-      this.scene.environmentIntensity = 0.85;
-      this.sunLight.color.setHex(0xfffaed);
-      this.sunLight.intensity = 2.05;
-      this.sunLight.position.set(22, 32, 18);
-      this.hemiLight.color.setHex(0x60a5fa);
-      this.hemiLight.groundColor.setHex(0x22c55e);
-      this.hemiLight.intensity = 0.85;
+      // Aurora City daylight: warm low-ish sun, sky-blue fill and less flat studio reflection so the
+      // micro-voxel colours stay saturated instead of washing out
+      this.scene.environmentIntensity = 0.42;
+      this.sunLight.color.setHex(0xffedd2);
+      this.sunLight.intensity = 2.45;
+      this.sunLight.position.set(26, 30, 14);
+      this.hemiLight.color.setHex(0xbfe3ff);
+      this.hemiLight.groundColor.setHex(0x4b6b3a);
+      this.hemiLight.intensity = 0.95;
       this.rimLight.color.setHex(0x93c5fd);
       this.rimLight.intensity = 0.38;
       this.shopWarmLight.intensity = 2.2;
@@ -904,6 +954,11 @@ export class VoxelGameEngine {
         this.bloomPass.threshold = 1.35;
       }
     }
+
+    // Aurora City water, sakura & aurora-borealis palettes follow the game's day/night and fog
+    const fog = this.scene.fog as THREE.FogExp2;
+    this.world.auroraCity.setTimeOfDay(isNight, fogHex, fog.density, this.sunLight.position);
+    this.world.kurobaStyle.setTimeOfDay(isNight);
 
     // Sync vehicle volumetric headlight cones
     for (let i = 0; i < this.vehicles.length; i++) {
@@ -1089,8 +1144,8 @@ export class VoxelGameEngine {
   private initTanks(): void {
     this.tanks = [];
     const rig = buildDrivableTankRig(this.materials);
-    rig.root.position.set(-68.0, 0.03, 18.0);
-    rig.root.rotation.set(0, Math.PI * 0.44, 0);
+    rig.root.position.set(TANK_PARK.x, 0.03, TANK_PARK.z);
+    rig.root.rotation.set(0, TANK_PARK.yaw, 0);
     rig.driverSeat.visible = false;
     rig.headlightCones.visible = this.timeOfDay === 'night';
     this.scene.add(rig.root);
@@ -1098,10 +1153,10 @@ export class VoxelGameEngine {
     const state: TankState = {
       id: 'type-90-mbt',
       name: 'TYPE-90 VOXEL MBT',
-      x: -68.0,
+      x: TANK_PARK.x,
       y: 0.03,
-      z: 18.0,
-      yaw: Math.PI * 0.44,
+      z: TANK_PARK.z,
+      yaw: TANK_PARK.yaw,
       turretYaw: 0,
       cannonPitch: 0.05,
       speed: 0,
@@ -1130,10 +1185,10 @@ export class VoxelGameEngine {
     }
     this.nearbyTank = null;
     for (const t of this.tanks) {
-      t.state.x = -68.0;
+      t.state.x = TANK_PARK.x;
       t.state.y = 0.03;
-      t.state.z = 18.0;
-      t.state.yaw = Math.PI * 0.44;
+      t.state.z = TANK_PARK.z;
+      t.state.yaw = TANK_PARK.yaw;
       t.state.turretYaw = 0;
       t.state.cannonPitch = 0.05;
       t.state.speed = 0;
@@ -1145,8 +1200,8 @@ export class VoxelGameEngine {
       t.state.respawnTimer = 0;
       t.state.cannonCooldown = 0;
       t.state.coaxialCooldown = 0;
-      t.rig.root.position.set(-68.0, 0.03, 18.0);
-      t.rig.root.rotation.set(0, Math.PI * 0.44, 0);
+      t.rig.root.position.set(TANK_PARK.x, 0.03, TANK_PARK.z);
+      t.rig.root.rotation.set(0, TANK_PARK.yaw, 0);
       t.rig.turret.rotation.y = 0;
       t.rig.cannonBarrel.rotation.x = 0;
       t.rig.wreckOverlay.visible = false;
@@ -1175,7 +1230,7 @@ export class VoxelGameEngine {
       { kind: 'canopy', x: 14.5, y: 0, z: -6.5, yaw: -Math.PI * 0.5, hp: 60, w: 1.6, h: 2.2, d: 2.2 },
       { kind: 'crate', x: -62.0, y: 0, z: 14.0, yaw: 0.1, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
       { kind: 'crate', x: -63.5, y: 0, z: 14.5, yaw: -0.2, hp: 50, w: 1.2, h: 1.2, d: 1.2 },
-      { kind: 'fence', x: -74.0, y: 0, z: 22.0, yaw: Math.PI * 0.25, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
+      { kind: 'fence', x: -60.5, y: 0, z: 16.4, yaw: Math.PI * 0.5, hp: 40, w: 2.0, h: 1.2, d: 0.35 },
     ];
 
     for (let i = 0; i < propSpecs.length; i++) {
@@ -1270,12 +1325,12 @@ export class VoxelGameEngine {
     vb.boxBottom(11.15, 0.85, 2.5, 0.2, 0.25, 0.25, 0xef4444, 'emissive');
 
     trainGroup.add(vb.build(this.materials));
-    trainGroup.position.set(-60, 0.18, 2.0);
+    trainGroup.position.set(-20, 0.18, 2.0);
     this.scene.add(trainGroup);
 
     this.trainCar = {
       mesh: trainGroup,
-      x: -60,
+      x: -20,
       y: 0.18,
       z: 2.0,
       speed: 15.5,
@@ -2025,7 +2080,7 @@ export class VoxelGameEngine {
     }
 
     if (this.phase !== 'playing') return;
-    const sens = this.mouseRightDown ? 0.0018 : 0.0028;
+    const sens = this.mouseRightDown ? 0.0018 * clamp(this.camera.fov / 44, 0.08, 1) : 0.0028;
 
     if (this.pointerLocked) {
       const dx = clamp(e.movementX || 0, -70, 70);
@@ -2044,6 +2099,14 @@ export class VoxelGameEngine {
 
   private handleWheel(e: WheelEvent): void {
     if (this.phase !== 'playing' || this.activeVehicle) return;
+    const optic = this.currentOptic();
+    if (this.mouseRightDown && optic?.maxZoom) {
+      const cur = this.scopeZoomByOptic[optic.id] ?? optic.zoom;
+      const next = clamp(cur * (e.deltaY > 0 ? 1 / 1.25 : 1.25), optic.zoom, optic.maxZoom);
+      this.scopeZoomByOptic[optic.id] = next;
+      this.forceHudEmit = true;
+      return;
+    }
     const idx = WEAPON_ORDER.indexOf(this.weapon.active);
     const nextIdx = (idx + (e.deltaY > 0 ? 1 : -1) + WEAPON_ORDER.length) % WEAPON_ORDER.length;
     this.pendingWeaponSwitch = WEAPON_ORDER[nextIdx];
@@ -2082,14 +2145,15 @@ export class VoxelGameEngine {
     this.emitHudSnapshot();
   }
 
-  public setCustomizeView(tab: 'character' | 'gun', weaponId?: WeaponId): void {
+  public setCustomizeView(tab: 'character' | 'face' | 'gun', weaponId?: WeaponId): void {
+    if (tab === this.customizeTab && (!weaponId || weaponId === this.weapon.active)) return;
     this.customizeTab = tab;
     if (weaponId && weaponId !== this.weapon.active) {
       this.weapon.active = weaponId;
       this.syncWeaponMeshes();
     }
     // Present a crisp 3/4 side profile when switching to Gun Armory so scope, muzzle, mag & charm shine!
-    this.customizeOrbitYaw = tab === 'gun' ? -0.68 : 0.32;
+    this.customizeOrbitYaw = tab === 'gun' ? Math.PI * 0.5 - 0.32 : tab === 'face' ? 0.18 : 0.32;
     if (this.phase === 'customize') {
       this.snapCustomizeCamera();
     }
@@ -2098,7 +2162,7 @@ export class VoxelGameEngine {
   }
 
   private snapCustomizeCamera(): void {
-    const targetFov = this.customizeTab === 'gun' ? 38 : 42;
+    const targetFov = this.customizeTab === 'gun' ? 38 : this.customizeTab === 'face' ? 32 : 42;
     this.camera.fov = targetFov;
     this.camera.updateProjectionMatrix();
     this.updateCustomizeStudio(0.016, true);
@@ -2124,8 +2188,7 @@ export class VoxelGameEngine {
     this.rebuildHeroRig();
     // Refresh ammo capacities to reflect mag attachment changes
     for (const id of WEAPON_ORDER) {
-      const cap = getEffectiveMagSize(id, this.loadoutMods.magMult);
-      this.weapon.ammo[id] = cap;
+      this.weapon.ammo[id] = getEffectiveMagSize(id, 1);
     }
     if (this.phase === 'customize') {
       this.updateCustomizeStudio(0.001, true);
@@ -2133,6 +2196,114 @@ export class VoxelGameEngine {
     }
     this.forceHudEmit = true;
     this.emitHudSnapshot();
+  }
+
+  /** Sanitises builds against unlocks, resolves their stats and writes them into WEAPONS. */
+  private resolveArmory(): Record<FirearmId, ResolvedGun> {
+    const levels = {
+      playerLevel: playerLevelInfo(this.progression).level,
+      weaponLevels: weaponLevels(this.progression),
+    };
+    const out = {} as Record<FirearmId, ResolvedGun>;
+    const overrides: Partial<Record<WeaponId, Partial<WeaponSpec>>> = {};
+    for (const f of FIREARMS) {
+      this.gunBuilds[f] = sanitizeBuild(f, this.gunBuilds[f], levels);
+      out[f] = resolveGun(f, this.gunBuilds[f], BASE_WEAPONS[f]);
+      overrides[f] = out[f].spec;
+    }
+    applyWeaponOverrides(overrides);
+    return out;
+  }
+
+  public getGunBuilds(): GunBuilds {
+    return cloneBuilds(this.gunBuilds);
+  }
+
+  public getProgression(): ProgressionState {
+    return { playerXp: this.progression.playerXp, weaponXp: { ...this.progression.weaponXp } };
+  }
+
+  /** Equips a gun model / attachments for one firearm (locked parts are reverted to defaults). */
+  public setGunBuild(firearm: FirearmId, build: GunBuild): GunBuilds {
+    this.gunBuilds[firearm] = { ...build };
+    this.resolvedGuns = this.resolveArmory();
+    saveGunBuilds(this.gunBuilds);
+    this.rebuildHeroRig();
+    for (const id of WEAPON_ORDER) {
+      this.weapon.ammo[id] = getEffectiveMagSize(id, 1);
+    }
+    if (this.phase === 'customize') {
+      this.updateCustomizeStudio(0.001, true);
+      this.renderFrame();
+    }
+    this.forceHudEmit = true;
+    this.emitHudSnapshot();
+    return cloneBuilds(this.gunBuilds);
+  }
+
+  /** Awards kill XP to the operator and the gun in hand, raising unlock toasts. */
+  private awardKillXp(xp: number): void {
+    const onFoot = !this.activeVehicle && !this.activeHelicopter && !this.activeTank;
+    const weapon: WeaponId | null = onFoot ? this.weapon.active : null;
+    const { state, events } = awardKill(this.progression, weapon, xp);
+    this.progression = state;
+    saveProgression(state);
+    if (events.length === 0) return;
+    // One toast per level-up, listing what it unlocked ("New: A, B +3 more")
+    const grouped: Array<{ title: string; items: string[] }> = [];
+    for (const ev of events) {
+      if (ev.kind === 'player_level' || ev.kind === 'weapon_level' || grouped.length === 0) {
+        grouped.push({ title: ev.kind === 'player_level' || ev.kind === 'weapon_level' ? ev.title : 'Unlocked', items: [] });
+        if (ev.kind === 'player_level' || ev.kind === 'weapon_level') continue;
+      }
+      grouped[grouped.length - 1].items.push(ev.title.replace(' unlocked', ''));
+    }
+    for (const g of grouped) {
+      const shown = g.items.slice(0, 3).join(', ');
+      const more = g.items.length > 3 ? ` +${g.items.length - 3} more` : '';
+      this.unlockToasts.push({
+        id: ++this.unlockToastSeq,
+        title: g.title,
+        detail: g.items.length > 0 ? `New: ${shown}${more}` : 'Rank up!',
+        timer: 5.5,
+      });
+    }
+    if (this.unlockToasts.length > 6) this.unlockToasts.splice(0, this.unlockToasts.length - 6);
+    gameAudio.playPickup();
+    this.forceHudEmit = true;
+  }
+
+  private currentOptic(): ResolvedGun['optic'] | null {
+    const id = this.weapon.active;
+    if (id === 'katana') return null;
+    return this.resolvedGuns[id as FirearmId]?.optic ?? null;
+  }
+
+  private currentOpticZoom(): number {
+    const optic = this.currentOptic();
+    if (!optic) return 1;
+    if (optic.maxZoom) return this.scopeZoomByOptic[optic.id] ?? optic.zoom;
+    return optic.zoom;
+  }
+
+  private buildScopeHud(): ScopeHudState {
+    const optic = this.currentOptic();
+    return {
+      blend: this.scopeBlend,
+      fullscreen: this.scopeFullscreen,
+      reticle: optic?.reticle ?? 'iron',
+      zoom: Math.round(this.currentOpticZoom() * 10) / 10,
+      reticleColor: optic?.color ?? '#ffffff',
+      opticName: optic?.name ?? '',
+      rangeM: this.scopeRangeM,
+      variableZoom: !!optic?.maxZoom,
+    };
+  }
+
+  private setThermal(on: boolean): void {
+    if (this.thermalActive === on) return;
+    this.thermalActive = on;
+    this.renderer.domElement.style.filter = on ? 'grayscale(1) contrast(1.75) brightness(1.18)' : '';
   }
 
   private rebuildHeroRig(): void {
@@ -2158,7 +2329,7 @@ export class VoxelGameEngine {
     });
     this.scene.remove(this.hero.root);
 
-    this.hero = buildHeroRig(this.materials, this.loadout);
+    this.hero = buildHeroRig(this.materials, this.loadout, this.gunBuilds);
     this.hero.root.position.copy(prevPos);
     this.hero.root.rotation.y = prevRotY;
     this.hero.root.visible = prevVisible;
@@ -2229,10 +2400,7 @@ export class VoxelGameEngine {
     }
 
     this.loadoutMods = computeLoadoutModifiers(this.loadout);
-    this.weapon = createInitialWeaponState(
-      this.loadoutMods.magMult,
-      this.loadoutMods.reloadMult,
-    );
+    this.weapon = createInitialWeaponState(1, 1);
     this.syncWeaponMeshes();
     this.lastReloadStage = 'none';
     this.muzzleFlashTimer = 0;
@@ -2347,7 +2515,7 @@ export class VoxelGameEngine {
     }
     const presets: Record<WorldZoneId, { x: number; z: number; yaw: number; pitch: number }> = {
       kuroba: { x: 0, z: 7.6, yaw: 0, pitch: 0.2 },
-      aurora: { x: -66, z: 13.8, yaw: Math.PI * 0.44, pitch: 0.14 },
+      aurora: { x: -52, z: 13.8, yaw: Math.PI * 0.5, pitch: 0.14 },
       fungi: { x: 64, z: 13.8, yaw: -Math.PI * 0.44, pitch: 0.14 },
       snowpeak: { x: 0, z: -64, yaw: 0.04, pitch: 0.08 },
     };
@@ -2841,7 +3009,7 @@ export class VoxelGameEngine {
       rig.boltOrPump.position.z = 0;
     }
     const activeRig = this.hero.weaponRigs[this.weapon.active];
-    this.hero.muzzlePoint.position.set(0, -0.09, activeRig.muzzleOffsetZ * 1.12);
+    this.hero.muzzlePoint.position.set(0, activeRig.muzzleY * 1.12, activeRig.muzzleOffsetZ * 1.12);
     this.hero.ejectPoint.position.copy(activeRig.ejectOffset).multiplyScalar(1.12);
   }
 
@@ -2908,6 +3076,36 @@ export class VoxelGameEngine {
     this.titleClock += dt;
     const isNight = this.timeOfDay === 'night';
 
+    // Leaving gameplay always drops the scope (thermal filter off, body visible again)
+    if (this.phase !== 'playing' && (this.scopeFullscreen || this.thermalActive || this.scopeBlend > 0)) {
+      this.scopeFullscreen = false;
+      this.scopeBlend = 0;
+      this.scopeRangeM = null;
+      this.setThermal(false);
+      this.hero.bodyPivot.visible = true;
+      this.forceHudEmit = true;
+    }
+
+    // Operator blinks every few seconds
+    this.blinkTimer -= dt;
+    if (this.blinkTimer <= 0) {
+      this.hero.eyelids.visible = true;
+      this.blinkHold = 0.11;
+      this.blinkTimer = 2.2 + Math.random() * 3.6;
+    }
+    if (this.blinkHold > 0) {
+      this.blinkHold -= dt;
+      if (this.blinkHold <= 0) this.hero.eyelids.visible = false;
+    }
+
+    // Unlock toasts: the three on screen count down, the rest wait their turn
+    if (this.unlockToasts.length > 0) {
+      for (let i = 0; i < Math.min(3, this.unlockToasts.length); i++) this.unlockToasts[i].timer -= dt;
+      const before = this.unlockToasts.length;
+      this.unlockToasts = this.unlockToasts.filter((t) => t.timer > 0);
+      if (this.unlockToasts.length !== before) this.forceHudEmit = true;
+    }
+
     // Gentle lantern sway on station porch
     for (let i = 0; i < this.world.animatedLanterns.length; i++) {
       const m = this.world.animatedLanterns[i];
@@ -2930,6 +3128,11 @@ export class VoxelGameEngine {
       ml.mesh.position.x = ml.baseX + Math.sin(this.titleClock * ml.speed + ml.phase) * ml.driftAmpX;
       ml.mesh.position.z = ml.baseZ + Math.cos(this.titleClock * ml.speed * 0.72 + ml.phase) * ml.driftAmpZ;
     }
+
+    // Aurora City: water, wind, fountain, harbor boats, traffic & commuter train (yield to the player)
+    _auroraPlayerPos.set(this.player.x, this.player.y, this.player.z);
+    this.world.auroraCity.update(this.titleClock, dt, this.phase === 'playing' ? _auroraPlayerPos : null);
+    this.world.kurobaStyle.update(this.titleClock);
 
     if (this.muzzleLightTimer > 0) {
       this.muzzleLightTimer = Math.max(0, this.muzzleLightTimer - dt);
@@ -3039,8 +3242,16 @@ export class VoxelGameEngine {
   private updateCustomizeStudio(dt: number, snap = false): void {
     // Gentle turntable rotation when user is not actively dragging the model
     if (!this.customizeDragging && !snap) {
-      const spinSpeed = this.customizeTab === 'gun' ? 0.16 : 0.34;
-      this.customizeOrbitYaw = normalizeAngle(this.customizeOrbitYaw + spinSpeed * dt);
+      if (this.customizeTab === 'face') {
+        // Ease back to a flattering 3/4 view of the face instead of spinning
+        this.customizeOrbitYaw += (Math.sin(this.titleClock * 0.5) * 0.35 + 0.12 - this.customizeOrbitYaw) * (1 - Math.exp(-2 * dt));
+      } else if (this.customizeTab === 'gun') {
+        // Weapon profile: muzzle pointing right, gun on the near side, gentle sway
+        const goal = Math.PI * 0.5 - 0.32 + Math.sin(this.titleClock * 0.45) * 0.22;
+        this.customizeOrbitYaw += (goal - this.customizeOrbitYaw) * (1 - Math.exp(-2.5 * dt));
+      } else {
+        this.customizeOrbitYaw = normalizeAngle(this.customizeOrbitYaw + 0.3 * dt);
+      }
     }
 
     const baseX = 0.2;
@@ -3062,7 +3273,7 @@ export class VoxelGameEngine {
     this.hero.rightArm.rotation.set(this.customizeTab === 'gun' ? -0.05 : -0.18, 0, 0);
     this.hero.rightArm.position.z = 0.06;
 
-    const targetFov = this.customizeTab === 'gun' ? 38 : 42;
+    const targetFov = this.customizeTab === 'gun' ? 38 : this.customizeTab === 'face' ? 32 : 42;
     if (snap || Math.abs(this.camera.fov - targetFov) > 0.05) {
       this.camera.fov = snap
         ? targetFov
@@ -3075,8 +3286,18 @@ export class VoxelGameEngine {
       this.hero.root.updateMatrixWorld(true);
       const gunWorld = _v1.set(0, 0, 0);
       this.hero.weaponRigs[this.weapon.active].root.getWorldPosition(gunWorld);
-      _camGoal.set(gunWorld.x - 1.55, gunWorld.y + 0.34, gunWorld.z + 2.15);
-      _lookGoal.set(gunWorld.x + 0.45, gunWorld.y + 0.04, gunWorld.z + 0.1);
+      const yaw = this.customizeOrbitYaw;
+      const reach = this.weapon.active === 'rail' || this.weapon.active === 'rpg' ? 0.55 : 0.42;
+      _lookGoal.set(gunWorld.x + Math.sin(yaw) * reach, gunWorld.y - 0.08, gunWorld.z + Math.cos(yaw) * reach);
+      // Frame the weapon a little left of centre, in the gap between the two studio panels
+      _lookGoal.x += 0.38;
+      _camGoal.set(_lookGoal.x - 0.05, _lookGoal.y + 0.3, _lookGoal.z + 2.7);
+    } else if (this.customizeTab === 'face') {
+      this.hero.root.updateMatrixWorld(true);
+      const headWorld = this.hero.headGroup.getWorldPosition(_v1);
+      const eye = headWorld.y + this.hero.eyeY - 0.02;
+      _camGoal.set(headWorld.x + 0.5, eye + 0.08, headWorld.z + 2.6);
+      _lookGoal.set(headWorld.x + 0.12, eye - 0.1, headWorld.z);
     } else {
       _camGoal.set(baseX + 0.75, baseY + 1.32, baseZ + 3.45);
       _lookGoal.set(baseX + 0.58, baseY + 0.96, baseZ);
@@ -4428,8 +4649,9 @@ export class VoxelGameEngine {
       }
 
       if (!impacted) {
-        for (let c = 0; c < this.world.colliders.length; c++) {
-          const box = this.world.colliders[c];
+        const nearRocket = queryNearbyColliders(this.world.colliders, r.x, r.z, 1.0);
+        for (let c = 0; c < nearRocket.length; c++) {
+          const box = nearRocket[c];
           if (!box.blocksBullets) continue;
           if (pointHitsBox(r.x, r.y, r.z, box, 0.2)) {
             impacted = true;
@@ -4691,7 +4913,7 @@ export class VoxelGameEngine {
     if (t.x > 134) {
       t.dir = -1;
       t.mesh.rotation.y = Math.PI;
-    } else if (t.x < -134) {
+    } else if (t.x < RAILWAY_WEST_END_X + t.length * 0.5 + 1.5) {
       t.dir = 1;
       t.mesh.rotation.y = 0;
     }
@@ -4701,9 +4923,8 @@ export class VoxelGameEngine {
     t.hornTimer -= dt;
     if (t.hornTimer <= 0) {
       const nearKuroba = Math.abs(t.x) < 22;
-      const nearAurora = Math.abs(t.x - (-68)) < 16;
       const nearFungi = Math.abs(t.x - 28) < 16;
-      if (nearKuroba || nearAurora || nearFungi) {
+      if (nearKuroba || nearFungi) {
         gameAudio.playTrainHorn();
         t.hornTimer = 9.0;
       }
@@ -4924,7 +5145,7 @@ export class VoxelGameEngine {
           this.score -= 30;
           this.speedBoostTimer = 22.0;
           for (const wid of WEAPON_ORDER) {
-            this.weapon.ammo[wid] = getEffectiveMagSize(wid, this.loadoutMods.magMult);
+            this.weapon.ammo[wid] = getEffectiveMagSize(wid, 1);
           }
           gameAudio.playVendingBuy();
           this.spawnParticles(this.player.x, this.player.y + 1, this.player.z, 16, [0x38bdf8, 0x0ea5e9, 0xffffff], 2.0, 4.5, 0.08, 0.16, 8, 0.35);
@@ -5398,8 +5619,8 @@ export class VoxelGameEngine {
         fireIntent,
         this.reloadJustPressed,
         this.pendingWeaponSwitch,
-        this.loadoutMods.magMult,
-        this.loadoutMods.reloadMult,
+        1,
+        1,
       );
       this.reloadJustPressed = false;
       this.pendingWeaponSwitch = undefined;
@@ -5568,12 +5789,77 @@ export class VoxelGameEngine {
     this.hero.contactShadow.scale.setScalar(shadowScale);
   }
 
+  /**
+   * Full-screen scope view: the camera sits at the operator's eye looking straight down the
+   * sight line with a little breathing sway; the body is hidden so it never blocks the lens.
+   */
+  private updateScopeCamera(dt: number): void {
+    this.hero.bodyPivot.visible = false;
+    this.scopeSwayClock += dt;
+    const zoom = this.currentOpticZoom();
+    const swayAmp = 0.0016 * Math.sqrt(zoom) * (this.player.grounded && Math.hypot(this.player.vx, this.player.vz) < 0.5 ? 1 : 2.2);
+    const swayYaw = Math.sin(this.scopeSwayClock * 1.1) * swayAmp + Math.sin(this.scopeSwayClock * 2.7) * swayAmp * 0.35;
+    const swayPitch = Math.sin(this.scopeSwayClock * 1.6 + 0.8) * swayAmp * 0.7;
+    const yaw = this.camYaw + swayYaw;
+    const pitch = this.camPitch + swayPitch;
+    const dirX = -Math.sin(yaw) * Math.cos(pitch);
+    const dirY = -Math.sin(pitch);
+    const dirZ = -Math.cos(yaw) * Math.cos(pitch);
+
+    this.hero.root.updateMatrixWorld(true);
+    const head = this.hero.headGroup.getWorldPosition(_camGoal);
+    head.y += this.hero.eyeY;
+    head.x += dirX * 0.3;
+    head.y += dirY * 0.3;
+    head.z += dirZ * 0.3;
+    this.camPos.copy(head);
+    this.camLook.set(head.x + dirX * 60, head.y + dirY * 60, head.z + dirZ * 60);
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camLook);
+
+    // Rangefinder: nearest enemy under the reticle, else where the sight line meets the ground
+    let range: number | null = null;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (e.aiState === 'ko') continue;
+      const ex = e.x - head.x;
+      const ey2 = e.y + e.height * 0.55 - head.y;
+      const ez = e.z - head.z;
+      const proj = ex * dirX + ey2 * dirY + ez * dirZ;
+      if (proj < 1 || proj > 400) continue;
+      const px = ex - dirX * proj;
+      const py = ey2 - dirY * proj;
+      const pz = ez - dirZ * proj;
+      if (Math.hypot(px, py, pz) < e.radius + 0.4 && (range === null || proj < range)) range = proj;
+    }
+    if (range === null && dirY < -0.01) {
+      const t = head.y / -dirY;
+      if (t < 400) range = t;
+    }
+    const rounded = range === null ? null : Math.round(range);
+    if (rounded !== this.scopeRangeM) this.scopeRangeM = rounded;
+  }
+
   private updateCameraRig(dt: number): void {
     const isFlying = this.activeHelicopter !== null;
     const isDriving = !isFlying && this.activeVehicle !== null;
     const isTank = !isFlying && !isDriving && this.activeTank !== null;
     const isAiming = !isDriving && !isFlying && !isTank && this.mouseRightDown;
     const isDashing = !isDriving && !isFlying && !isTank && this.player.dashTimer > 0;
+
+    // Aim-in blend (faster with light optics / grips) and scope state
+    const optic = this.currentOptic();
+    const gunStats = this.weapon.active === 'katana' ? null : this.resolvedGuns[this.weapon.active as FirearmId];
+    const adsRate = 12 * (gunStats?.adsSpeedMult ?? 1);
+    const blendTarget = isAiming && optic && !this.weapon.reloading ? 1 : 0;
+    this.scopeBlend += (blendTarget - this.scopeBlend) * (1 - Math.exp(-adsRate * dt));
+    const zoom = this.currentOpticZoom();
+    const wantFullscreen = !!optic && zoom >= 2 && this.scopeBlend > 0.8 && blendTarget === 1;
+    if (wantFullscreen !== this.scopeFullscreen) {
+      this.scopeFullscreen = wantFullscreen;
+      this.forceHudEmit = true;
+    }
+    this.setThermal(this.scopeFullscreen && optic?.reticle === 'thermal');
 
     // Dynamic FOV (tightens on ADS zoom, widens smoothly with vehicle speed & nitro!)
     const speedNorm = isDriving
@@ -5589,15 +5875,25 @@ export class VoxelGameEngine {
         ? 60 + speedNorm * 10 + (this.activeVehicle!.state.boosting ? 5 : 0)
         : isTank
           ? 58 + speedNorm * 6
-          : isAiming
-            ? 44
-            : isDashing
-              ? 64
-              : 56;
-    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
-      this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-10 * dt));
+          : this.scopeFullscreen
+            ? 56 / zoom
+            : isAiming
+              ? 44 / Math.max(1, zoom * 0.9)
+              : isDashing
+                ? 64
+                : 56;
+    if (Math.abs(this.camera.fov - targetFov) > 0.01) {
+      const fovRate = this.scopeFullscreen ? 22 : 10;
+      this.camera.fov += (targetFov - this.camera.fov) * (1 - Math.exp(-fovRate * dt));
       this.camera.updateProjectionMatrix();
     }
+
+    if (this.scopeFullscreen) {
+      this.updateScopeCamera(dt);
+      return;
+    }
+    this.hero.bodyPivot.visible = true;
+    if (this.scopeRangeM !== null) this.scopeRangeM = null;
 
     // Over-the-shoulder, vehicle chase, or helicopter aerial combat pivot
     const pivotX = this.player.x;
@@ -5691,7 +5987,8 @@ export class VoxelGameEngine {
     const mods = this.loadoutMods;
     gameAudio.playShoot(spec.id);
 
-    const effRecoil = spec.recoilKick * mods.recoilMult;
+    const gunStats = this.resolvedGuns[spec.id as FirearmId];
+    const effRecoil = spec.recoilKick * (this.scopeFullscreen ? 0.75 : 1);
     this.recoilVisual = Math.min(1, this.recoilVisual + effRecoil);
     this.crosshairSpread = Math.min(1, this.crosshairSpread + effRecoil * 0.85);
     this.trauma = Math.min(1, this.trauma + effRecoil * 0.28);
@@ -5766,9 +6063,14 @@ export class VoxelGameEngine {
     // 3. Eject Spinning Brass / Red Shotgun Shell Casing from Ejection Port
     this.spawnShellCasing(_ejectPos.x, _ejectPos.y, _ejectPos.z, spec.id);
 
-    const spreadMult = (this.mouseRightDown ? 0.45 : 1.0) * mods.spreadMult;
-    const effDamage = Math.round(spec.damage * mods.damageMult);
-    const effProjSpeed = spec.projectileSpeed * mods.speedMult;
+    const aimedIn = this.mouseRightDown && this.scopeBlend > 0.55;
+    const spreadMult = aimedIn
+      ? 0.45 * (gunStats?.adsSpreadMult ?? 1)
+      : this.mouseRightDown
+        ? 0.7
+        : 1.0;
+    const effDamage = spec.damage;
+    const effProjSpeed = spec.projectileSpeed;
 
     for (let p = 0; p < spec.pellets; p++) {
       _v1.subVectors(_aimPoint, _muzzlePos).normalize();
@@ -6373,8 +6675,9 @@ export class VoxelGameEngine {
         }
 
         // Static world cover collision
-        for (let c = 0; c < this.world.colliders.length; c++) {
-          const box: ColliderBox = this.world.colliders[c];
+        const nearShot = queryNearbyColliders(this.world.colliders, p.x, p.z, 1.0);
+        for (let c = 0; c < nearShot.length; c++) {
+          const box: ColliderBox = nearShot[c];
           if (!box.blocksBullets) continue;
           if (pointHitsBox(p.x, p.y, p.z, box, 0.08)) {
             this.spawnParticles(p.x, p.y, p.z, 5, [p.color, 0xfff0c4], 1.5, 4.2, 0.08, 0.15, 14, 0.32);
@@ -6565,6 +6868,7 @@ export class VoxelGameEngine {
       this.comboDecayTimer = 4.6;
       this.kills += 1;
       this.score += calculateKillScore(e.scoreValue, this.combo);
+      this.awardKillXp(e.scoreValue);
       if (this.score > this.bestScore) {
         this.bestScore = this.score;
         this.saveBestScore(this.bestScore);
@@ -6686,7 +6990,7 @@ export class VoxelGameEngine {
           this.score += 150;
           this.weapon.ammo[this.weapon.active] = getEffectiveMagSize(
             this.weapon.active,
-            this.loadoutMods.magMult,
+            1,
           );
           this.weapon.reloading = false;
           this.player.dashCharges = this.player.maxDashCharges;
@@ -6920,10 +7224,10 @@ export class VoxelGameEngine {
       weapon: this.weapon.active,
       ammo: { ...this.weapon.ammo },
       magSizes: {
-        pulse: getEffectiveMagSize('pulse', this.loadoutMods.magMult),
-        scatter: getEffectiveMagSize('scatter', this.loadoutMods.magMult),
-        rail: getEffectiveMagSize('rail', this.loadoutMods.magMult),
-        rpg: getEffectiveMagSize('rpg', this.loadoutMods.magMult),
+        pulse: getEffectiveMagSize('pulse', 1),
+        scatter: getEffectiveMagSize('scatter', 1),
+        rail: getEffectiveMagSize('rail', 1),
+        rpg: getEffectiveMagSize('rpg', 1),
         katana: 999,
       },
       reloading: this.weapon.reloading,
@@ -6931,6 +7235,12 @@ export class VoxelGameEngine {
         ? clamp(1 - this.weapon.reloadTimer / Math.max(0.01, this.weapon.reloadTotal), 0, 1)
         : 0,
       aiming: this.mouseRightDown && !this.activeVehicle && !this.activeHelicopter,
+      scope: this.buildScopeHud(),
+      unlockToasts: this.unlockToasts.slice(0, 3).map((t) => ({ ...t })),
+      playerLevel: playerLevelInfo(this.progression).level,
+      playerLevelProgress: playerLevelInfo(this.progression).progress,
+      weaponLevel: weaponLevelInfo(this.progression, this.weapon.active).level,
+      weaponLevelProgress: weaponLevelInfo(this.progression, this.weapon.active).progress,
       pointerLocked: this.pointerLocked,
       hitmarkerTimer: this.hitmarkerTimer,
       hitmarkerCrit: this.hitmarkerCrit,

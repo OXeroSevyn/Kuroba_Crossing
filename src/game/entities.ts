@@ -1,19 +1,16 @@
 import * as THREE from 'three';
+import { DEFAULT_GUN_BUILDS } from './armory';
 import { DEFAULT_LOADOUT, getOption } from './customization';
-import type { EnemyArchetype, GameMode, LoadoutConfig, VehicleKind, WeaponId } from './types';
+import { buildFirearm, buildKatanaRig, type WeaponRig } from './gunModels';
+import { buildOperatorParts } from './heroModel';
+import type { EnemyArchetype, GameMode, GunBuilds, LoadoutConfig, VehicleKind, WeaponId } from './types';
 import {
   createContactShadowMesh,
   type SharedVoxelMaterials,
   VoxelAssembler,
 } from './voxelBuilder';
 
-export interface WeaponRig {
-  root: THREE.Group;
-  magazine: THREE.Group;
-  boltOrPump: THREE.Group;
-  muzzleOffsetZ: number;
-  ejectOffset: THREE.Vector3;
-}
+export type { WeaponRig } from './gunModels';
 
 export interface HeroRig {
   root: THREE.Group;
@@ -31,6 +28,10 @@ export interface HeroRig {
   thrusterFlame: THREE.Mesh;
   contactShadow: THREE.Mesh;
   flashMaterials: THREE.MeshStandardMaterial[];
+  /** Skin-coloured lids over the eyes, shown briefly to blink. */
+  eyelids: THREE.Group;
+  /** Eye height in head space (scope camera anchor). */
+  eyeY: number;
 }
 
 export interface DrivableVehicleRig {
@@ -99,382 +100,21 @@ function buildMuzzleFlashMesh(tracerHex = 0xffa838): THREE.Group {
   return group;
 }
 
-/** Helper to attach modular Optic geometry onto any firearm top rail */
-function addModularOptic(
-  vb: VoxelAssembler,
-  opticId: string,
-  lensHex: number,
-  railY: number,
-  railZ: number,
-  steelHex: number,
-  darkHex: number,
-): void {
-  if (opticId === 'eotech_holo') {
-    vb.boxBottom(0, railY, railZ, 0.12, 0.12, 0.17, darkHex);
-    vb.boxBottom(0, railY + 0.025, railZ, 0.08, 0.065, 0.19, lensHex, 'emissive');
-  } else if (opticId === 'red_dot') {
-    vb.boxBottom(0, railY, railZ, 0.07, 0.05, 0.11, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.05, railZ, 0.09, 0.09, 0.12, darkHex);
-    vb.boxBottom(0, railY + 0.07, railZ, 0.05, 0.05, 0.14, lensHex, 'emissive');
-  } else if (opticId === 'acog_4x') {
-    vb.boxBottom(0, railY, railZ, 0.08, 0.05, 0.18, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.05, railZ + 0.02, 0.11, 0.11, 0.28, darkHex, 'metal');
-    vb.boxBottom(0, railY + 0.16, railZ + 0.04, 0.04, 0.03, 0.14, lensHex, 'emissive');
-    vb.boxBottom(0, railY + 0.07, railZ + 0.17, 0.08, 0.08, 0.03, lensHex, 'emissive');
-  } else if (opticId === 'thermal_nv') {
-    vb.boxBottom(0, railY, railZ + 0.02, 0.15, 0.14, 0.26, darkHex, 'metal');
-    vb.boxBottom(0, railY + 0.02, railZ + 0.16, 0.11, 0.1, 0.04, lensHex, 'emissive');
-    vb.boxBottom(0.08, railY + 0.04, railZ + 0.02, 0.04, 0.06, 0.12, steelHex, 'metal');
-  } else if (opticId === 'long_sniper') {
-    vb.boxBottom(0, railY, railZ - 0.1, 0.07, 0.07, 0.05, steelHex, 'metal');
-    vb.boxBottom(0, railY, railZ + 0.12, 0.07, 0.07, 0.05, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.06, railZ + 0.02, 0.11, 0.11, 0.44, darkHex, 'metal');
-    vb.boxBottom(0, railY + 0.05, railZ + 0.24, 0.14, 0.14, 0.12, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.07, railZ + 0.31, 0.1, 0.1, 0.03, lensHex, 'emissive');
-  } else if (opticId === 'iron_ring') {
-    vb.boxBottom(0, railY, railZ - 0.1, 0.1, 0.08, 0.05, steelHex, 'metal');
-    vb.boxBottom(-0.04, railY + 0.06, railZ - 0.1, 0.025, 0.06, 0.04, steelHex, 'metal');
-    vb.boxBottom(0.04, railY + 0.06, railZ - 0.1, 0.025, 0.06, 0.04, steelHex, 'metal');
-    vb.boxBottom(0, railY, railZ + 0.28, 0.06, 0.1, 0.04, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.08, railZ + 0.28, 0.03, 0.03, 0.04, lensHex, 'emissive');
-  } else if (opticId === 'cyber_rail') {
-    vb.boxBottom(0, railY, railZ + 0.04, 0.14, 0.06, 0.32, darkHex, 'metal');
-    vb.boxBottom(-0.06, railY + 0.06, railZ + 0.04, 0.03, 0.1, 0.26, steelHex, 'metal');
-    vb.boxBottom(0.06, railY + 0.06, railZ + 0.04, 0.03, 0.1, 0.26, steelHex, 'metal');
-    vb.boxBottom(0, railY + 0.08, railZ + 0.04, 0.1, 0.08, 0.22, lensHex, 'emissive');
-  } else {
-    // dual_cant
-    vb.boxBottom(0, railY, railZ, 0.11, 0.11, 0.22, darkHex, 'metal');
-    vb.boxBottom(0, railY + 0.03, railZ + 0.12, 0.08, 0.07, 0.03, lensHex, 'emissive');
-    vb.boxBottom(-0.1, railY + 0.01, railZ + 0.06, 0.07, 0.07, 0.09, steelHex, 'metal');
-    vb.boxBottom(-0.1, railY + 0.03, railZ + 0.11, 0.05, 0.05, 0.03, 0xff3b30, 'emissive');
-  }
-}
-
-/** Helper to attach modular Muzzle device at barrel tip */
-function addModularMuzzle(
-  vb: VoxelAssembler,
-  muzzleId: string,
-  tipY: number,
-  tipZ: number,
-  steelHex: number,
-  darkHex: number,
-): number {
-  if (muzzleId === 'suppressor') {
-    vb.boxBottom(0, tipY - 0.02, tipZ + 0.16, 0.11, 0.11, 0.36, darkHex, 'metal');
-    vb.boxBottom(0, tipY - 0.01, tipZ + 0.16, 0.12, 0.03, 0.28, steelHex, 'metal');
-    return tipZ + 0.36;
-  } else if (muzzleId === 'heavy_comp') {
-    vb.boxBottom(0, tipY - 0.03, tipZ + 0.08, 0.15, 0.13, 0.2, steelHex, 'metal');
-    vb.boxBottom(0, tipY + 0.05, tipZ + 0.08, 0.09, 0.04, 0.14, darkHex);
-    return tipZ + 0.2;
-  } else if (muzzleId === 'breach_spike') {
-    vb.boxBottom(0, tipY - 0.03, tipZ + 0.08, 0.14, 0.14, 0.16, 0x9c2820, 'metal');
-    vb.boxBottom(-0.06, tipY + 0.02, tipZ + 0.18, 0.04, 0.04, 0.1, 0xd9dce0, 'metal');
-    vb.boxBottom(0.06, tipY + 0.02, tipZ + 0.18, 0.04, 0.04, 0.1, 0xd9dce0, 'metal');
-    vb.boxBottom(0, tipY - 0.05, tipZ + 0.18, 0.05, 0.04, 0.1, 0xd9dce0, 'metal');
-    return tipZ + 0.24;
-  } else if (muzzleId === 'flash_hider') {
-    vb.boxBottom(0, tipY - 0.01, tipZ + 0.08, 0.09, 0.09, 0.16, darkHex, 'metal');
-    vb.boxBottom(-0.04, tipY, tipZ + 0.15, 0.025, 0.025, 0.1, steelHex, 'metal');
-    vb.boxBottom(0.04, tipY, tipZ + 0.15, 0.025, 0.025, 0.1, steelHex, 'metal');
-    return tipZ + 0.2;
-  } else if (muzzleId === 'twin_cannon') {
-    vb.boxBottom(0, tipY - 0.03, tipZ + 0.09, 0.2, 0.12, 0.18, 0xd9a844, 'metal');
-    vb.boxBottom(-0.08, tipY - 0.01, tipZ + 0.1, 0.06, 0.08, 0.12, darkHex);
-    vb.boxBottom(0.08, tipY - 0.01, tipZ + 0.1, 0.06, 0.08, 0.12, darkHex);
-    return tipZ + 0.2;
-  } else if (muzzleId === 'cryo_shroud') {
-    vb.boxBottom(0, tipY - 0.03, tipZ + 0.12, 0.14, 0.14, 0.28, steelHex, 'metal');
-    vb.boxBottom(0, tipY + 0.01, tipZ + 0.12, 0.16, 0.05, 0.22, 0x7cc4ff, 'emissive');
-    return tipZ + 0.28;
-  } else if (muzzleId === 'long_choke') {
-    vb.boxBottom(0, tipY - 0.01, tipZ + 0.12, 0.1, 0.1, 0.28, steelHex, 'metal');
-    return tipZ + 0.28;
-  }
-  // slotted_brake
-  vb.boxBottom(0, tipY - 0.02, tipZ + 0.06, 0.1, 0.1, 0.12, darkHex, 'metal');
-  return tipZ + 0.14;
-}
-
-/** Helper to attach modular Underbarrel attachment */
-function addModularUnderbarrel(
-  vb: VoxelAssembler,
-  underId: string,
-  baseY: number,
-  baseZ: number,
-  steelHex: number,
-  darkHex: number,
-): void {
-  if (underId === 'angled_grip') {
-    vb.boxBottom(0, baseY - 0.09, baseZ, 0.08, 0.1, 0.18, darkHex);
-  } else if (underId === 'vertical_grip') {
-    vb.boxBottom(0, baseY - 0.2, baseZ, 0.075, 0.21, 0.08, darkHex);
-  } else if (underId === 'laser_pod') {
-    vb.boxBottom(-0.09, baseY + 0.02, baseZ + 0.08, 0.07, 0.07, 0.18, darkHex, 'metal');
-    vb.boxBottom(-0.09, baseY + 0.03, baseZ + 0.18, 0.04, 0.04, 0.04, 0xff2f38, 'emissive');
-    vb.boxBottom(-0.09, baseY + 0.04, baseZ + 0.42, 0.018, 0.018, 0.44, 0xff2f38, 'emissive');
-  } else if (underId === 'grenade_tube') {
-    vb.boxBottom(0, baseY - 0.14, baseZ + 0.02, 0.12, 0.13, 0.34, 0x485244, 'metal');
-    vb.boxBottom(0, baseY - 0.13, baseZ + 0.2, 0.09, 0.09, 0.06, darkHex, 'metal');
-  } else if (underId === 'heavy_bipod') {
-    vb.boxBottom(-0.12, baseY - 0.26, baseZ + 0.1, 0.04, 0.26, 0.05, steelHex, 'metal');
-    vb.boxBottom(0.12, baseY - 0.26, baseZ + 0.1, 0.04, 0.26, 0.05, steelHex, 'metal');
-    vb.boxBottom(0, baseY - 0.05, baseZ + 0.1, 0.22, 0.05, 0.07, darkHex, 'metal');
-  } else if (underId === 'floodlight') {
-    vb.boxBottom(0, baseY - 0.11, baseZ + 0.08, 0.11, 0.11, 0.22, steelHex, 'metal');
-    vb.boxBottom(0, baseY - 0.1, baseZ + 0.2, 0.09, 0.09, 0.04, 0xfff3c4, 'emissive');
-  } else if (underId === 'bayonet_blade') {
-    vb.boxBottom(0, baseY - 0.08, baseZ + 0.08, 0.06, 0.06, 0.14, darkHex);
-    vb.boxBottom(0, baseY - 0.09, baseZ + 0.34, 0.03, 0.08, 0.38, 0xdce4ec, 'metal');
-  } else {
-    // stubby_grip
-    vb.boxBottom(0, baseY - 0.14, baseZ, 0.09, 0.14, 0.1, 0x8f7a5b);
-  }
-}
-
-/** Helper to attach dangling micro-voxel Weapon Charm on receiver side */
-function addModularCharm(vb: VoxelAssembler, charmId: string, cx: number, cy: number, cz: number): void {
-  if (charmId === 'none') return;
-  // Tiny silver lanyard ring
-  vb.boxBottom(cx, cy, cz, 0.025, 0.05, 0.025, 0xcfd6dd, 'metal');
-  if (charmId === 'mini_torii') {
-    vb.boxBottom(cx, cy - 0.12, cz - 0.03, 0.025, 0.11, 0.025, 0xd43b2c);
-    vb.boxBottom(cx, cy - 0.12, cz + 0.03, 0.025, 0.11, 0.025, 0xd43b2c);
-    vb.boxBottom(cx, cy - 0.04, cz, 0.035, 0.03, 0.11, 0xd43b2c);
-  } else if (charmId === 'voxel_skull') {
-    vb.boxBottom(cx, cy - 0.11, cz, 0.07, 0.09, 0.08, 0xe8e2d5);
-    vb.boxBottom(cx + 0.035, cy - 0.08, cz - 0.015, 0.02, 0.025, 0.025, 0x1a1414);
-    vb.boxBottom(cx + 0.035, cy - 0.08, cz + 0.015, 0.02, 0.025, 0.025, 0x1a1414);
-  } else if (charmId === 'red_postbox') {
-    vb.boxBottom(cx, cy - 0.12, cz, 0.06, 0.1, 0.06, 0xe03c28);
-    vb.boxBottom(cx, cy - 0.03, cz, 0.07, 0.02, 0.07, 0xbf2c20);
-  } else if (charmId === 'snow_crystal') {
-    vb.boxBottom(cx, cy - 0.12, cz, 0.03, 0.11, 0.03, 0x8ce0ff, 'emissive');
-    vb.boxBottom(cx, cy - 0.08, cz, 0.03, 0.03, 0.11, 0x8ce0ff, 'emissive');
-  } else if (charmId === 'neon_shroom') {
-    vb.boxBottom(cx, cy - 0.12, cz, 0.04, 0.06, 0.04, 0xe8e0d0);
-    vb.boxBottom(cx, cy - 0.07, cz, 0.09, 0.05, 0.09, 0xa84cff, 'emissive');
-  } else if (charmId === 'golden_star') {
-    vb.boxBottom(cx, cy - 0.11, cz, 0.04, 0.09, 0.09, 0xffd447, 'emissive');
-  } else if (charmId === 'mini_kei') {
-    vb.boxBottom(cx, cy - 0.11, cz, 0.06, 0.07, 0.12, 0xf2f0ea);
-    vb.boxBottom(cx, cy - 0.07, cz + 0.03, 0.055, 0.04, 0.05, 0x3b4856);
-  }
-}
-
-/** Helper to construct modular detachable Magazine geometry */
-function buildModularMagazine(
-  magId: string,
-  baseY: number,
-  baseZ: number,
-  width: number,
-  materials: SharedVoxelMaterials,
-): THREE.Group {
-  const g = new THREE.Group();
-  const asm = new VoxelAssembler();
-  if (magId === 'extended_mag') {
-    asm.boxBottom(0, baseY - 0.14, baseZ, width, 0.34, 0.14, 0x343a42, 'metal');
-    asm.boxBottom(0, baseY - 0.18, baseZ + 0.03, width + 0.01, 0.07, 0.14, 0xd9a844, 'metal');
-  } else if (magId === 'fast_dual') {
-    asm.boxBottom(-0.045, baseY, baseZ, width * 0.85, 0.22, 0.13, 0x262b32);
-    asm.boxBottom(0.045, baseY - 0.03, baseZ, width * 0.85, 0.22, 0.13, 0x343a42);
-    asm.boxBottom(0, baseY + 0.06, baseZ, width * 1.9, 0.06, 0.15, 0xd9a844);
-  } else if (magId === 'drum_mag') {
-    asm.boxBottom(0, baseY + 0.06, baseZ, width, 0.14, 0.13, 0x262b32);
-    asm.boxBottom(-0.1, baseY - 0.08, baseZ, 0.15, 0.18, 0.16, 0x353b44, 'metal');
-    asm.boxBottom(0.1, baseY - 0.08, baseZ, 0.15, 0.18, 0.16, 0x353b44, 'metal');
-  } else if (magId === 'light_skel') {
-    asm.boxBottom(0, baseY + 0.02, baseZ, width * 0.9, 0.2, 0.12, 0x737d87, 'metal');
-    asm.boxBottom(0, baseY + 0.07, baseZ, width + 0.01, 0.08, 0.06, 0x1b1f24);
-  } else if (magId === 'cryo_cell') {
-    asm.boxBottom(0, baseY - 0.04, baseZ, width + 0.02, 0.24, 0.15, 0x1e2b38, 'metal');
-    asm.boxBottom(0, baseY + 0.01, baseZ, width + 0.035, 0.14, 0.09, 0x45e8ff, 'emissive');
-  } else {
-    // standard_mag
-    asm.boxBottom(0, baseY, baseZ, width, 0.22, 0.13, 0x1c2025);
-    asm.boxBottom(0, baseY - 0.08, baseZ + 0.04, width, 0.12, 0.12, 0x353a40);
-  }
-  g.add(asm.build(materials));
-  return g;
-}
-
 /**
- * Builds 3 high-detail micro-voxel tactical firearms customized with all 60 Gun Armory options.
- */
-function buildDetailedWeapons(
-  materials: SharedVoxelMaterials,
-  loadout: LoadoutConfig,
-): Record<WeaponId, WeaponRig> {
-  const skinOpt = getOption('gunSkin', loadout.gunSkin);
-  const opticOpt = getOption('optic', loadout.optic);
-  const tracerOpt = getOption('tracerFx', loadout.tracerFx);
-
-  const PRIMARY = skinOpt.hex;
-  const SECONDARY = skinOpt.secondaryHex ?? 0x3b424c;
-  const DARK_POLY = 0x1c2025;
-  const WALNUT = loadout.gunSkin === 'gunmetal' ? 0x6b3e22 : PRIMARY;
-  const WALNUT_DARK = loadout.gunSkin === 'gunmetal' ? 0x4c2b16 : SECONDARY;
-  const SHELL_RED = 0xc92c24;
-  const BRASS = 0xd9a844;
-
-  // 1. M4-K TACTICAL CARBINE
-  const pulseRoot = new THREE.Group();
-  const pulseBody = new VoxelAssembler();
-  pulseBody.boxBottom(0, -0.15, 0.06, 0.09, 0.17, 0.24, DARK_POLY);
-  pulseBody.boxBottom(0, -0.12, 0.24, 0.08, 0.1, 0.18, SECONDARY, 'metal');
-  pulseBody.boxBottom(0, -0.19, 0.48, 0.13, 0.18, 0.38, PRIMARY, 'metal');
-  pulseBody.boxBottom(0, -0.34, 0.34, 0.09, 0.18, 0.11, DARK_POLY);
-  // Top Picatinny rail + Modular Optic
-  pulseBody.boxBottom(0, -0.01, 0.56, 0.08, 0.04, 0.56, SECONDARY, 'metal');
-  addModularOptic(pulseBody, loadout.optic, opticOpt.hex, 0.03, 0.48, SECONDARY, DARK_POLY);
-  // Handguard + skin accent panels + Modular Underbarrel
-  pulseBody.boxBottom(0, -0.16, 0.84, 0.14, 0.14, 0.38, PRIMARY, 'metal');
-  pulseBody.boxBottom(-0.075, -0.13, 0.84, 0.03, 0.07, 0.32, SECONDARY);
-  pulseBody.boxBottom(0.075, -0.13, 0.84, 0.03, 0.07, 0.32, SECONDARY);
-  addModularUnderbarrel(pulseBody, loadout.underbarrel, -0.16, 0.86, SECONDARY, DARK_POLY);
-  // Side flashlight pod
-  pulseBody.boxBottom(-0.09, -0.14, 0.96, 0.06, 0.06, 0.16, SECONDARY, 'metal');
-  pulseBody.boxBottom(-0.09, -0.14, 1.05, 0.05, 0.05, 0.03, 0xfff5d6, 'emissive');
-  // Barrel + Modular Muzzle
-  pulseBody.boxBottom(0, -0.12, 1.12, 0.06, 0.06, 0.24, SECONDARY, 'metal');
-  const pulseMuzzleZ = addModularMuzzle(pulseBody, loadout.muzzle, -0.11, 1.24, SECONDARY, DARK_POLY);
-  // Weapon Charm on side of receiver
-  addModularCharm(pulseBody, loadout.charm, 0.085, -0.12, 0.42);
-  pulseRoot.add(pulseBody.build(materials));
-
-  const pulseMag = buildModularMagazine(loadout.magazine, -0.36, 0.56, 0.08, materials);
-  pulseRoot.add(pulseMag);
-
-  const pulseBolt = new THREE.Group();
-  const pBoltAsm = new VoxelAssembler();
-  pBoltAsm.boxBottom(-0.07, -0.1, 0.48, 0.04, 0.05, 0.14, BRASS, 'metal');
-  pBoltAsm.boxBottom(0, -0.02, 0.31, 0.11, 0.04, 0.06, SECONDARY, 'metal');
-  pulseBolt.add(pBoltAsm.build(materials));
-  pulseRoot.add(pulseBolt);
-
-  // 2. M870 BREACH SHOTGUN
-  const scatterRoot = new THREE.Group();
-  const scatterBody = new VoxelAssembler();
-  scatterBody.boxBottom(0, -0.22, 0.08, 0.11, 0.2, 0.32, WALNUT);
-  scatterBody.boxBottom(0, -0.22, -0.09, 0.11, 0.21, 0.05, DARK_POLY);
-  scatterBody.boxBottom(0, -0.21, 0.3, 0.1, 0.15, 0.16, WALNUT_DARK);
-  scatterBody.boxBottom(0, -0.18, 0.52, 0.16, 0.18, 0.34, PRIMARY, 'metal');
-  for (let s = 0; s < 4; s++) {
-    scatterBody.boxBottom(0.095, -0.14, 0.4 + s * 0.075, 0.04, 0.09, 0.05, SHELL_RED);
-    scatterBody.boxBottom(0.095, -0.17, 0.4 + s * 0.075, 0.04, 0.03, 0.05, BRASS, 'metal');
-  }
-  addModularOptic(scatterBody, loadout.optic, opticOpt.hex, 0.0, 0.52, SECONDARY, DARK_POLY);
-  scatterBody.boxBottom(0, -0.09, 0.98, 0.1, 0.1, 0.64, SECONDARY, 'metal');
-  scatterBody.boxBottom(0, -0.04, 0.92, 0.11, 0.04, 0.44, PRIMARY, 'metal');
-  scatterBody.boxBottom(0, -0.18, 0.94, 0.09, 0.08, 0.54, DARK_POLY, 'metal');
-  addModularUnderbarrel(scatterBody, loadout.underbarrel, -0.18, 1.06, SECONDARY, DARK_POLY);
-  scatterBody.boxBottom(0, -0.01, 1.24, 0.04, 0.05, 0.04, tracerOpt.hex, 'emissive');
-  const scatterMuzzleZ = addModularMuzzle(scatterBody, loadout.muzzle, -0.08, 1.3, SECONDARY, DARK_POLY);
-  addModularCharm(scatterBody, loadout.charm, 0.1, -0.12, 0.38);
-  scatterRoot.add(scatterBody.build(materials));
-
-  const scatterMag = new THREE.Group();
-  const sMagAsm = new VoxelAssembler();
-  sMagAsm.boxBottom(0, -0.25, 0.52, 0.06, 0.08, 0.14, loadout.magazine === 'cryo_cell' ? 0x45e8ff : SHELL_RED);
-  scatterMag.add(sMagAsm.build(materials));
-  scatterRoot.add(scatterMag);
-
-  const scatterPump = new THREE.Group();
-  const sPumpAsm = new VoxelAssembler();
-  sPumpAsm.boxBottom(0, -0.21, 0.86, 0.15, 0.13, 0.28, WALNUT);
-  for (let r = 0; r < 4; r++) {
-    sPumpAsm.boxBottom(0, -0.215, 0.76 + r * 0.065, 0.16, 0.12, 0.025, WALNUT_DARK);
-  }
-  scatterPump.add(sPumpAsm.build(materials));
-  scatterRoot.add(scatterPump);
-  scatterRoot.visible = false;
-
-  // 3. K-50 ANTI-MATERIEL PRECISION RIFLE
-  const railRoot = new THREE.Group();
-  const railBody = new VoxelAssembler();
-  railBody.boxBottom(0, -0.22, 0.04, 0.1, 0.22, 0.34, DARK_POLY);
-  railBody.boxBottom(0, -0.04, 0.12, 0.11, 0.08, 0.2, SECONDARY);
-  railBody.boxBottom(0, -0.19, 0.48, 0.16, 0.2, 0.48, PRIMARY, 'metal');
-  railBody.boxBottom(0, -0.35, 0.32, 0.09, 0.18, 0.11, DARK_POLY);
-  addModularOptic(railBody, loadout.optic, opticOpt.hex, 0.01, 0.5, SECONDARY, DARK_POLY);
-  railBody.boxBottom(0, -0.15, 1.0, 0.12, 0.12, 0.62, SECONDARY, 'metal');
-  addModularUnderbarrel(railBody, loadout.underbarrel, -0.16, 1.04, SECONDARY, DARK_POLY);
-  railBody.boxBottom(0, -0.12, 1.38, 0.08, 0.08, 0.22, PRIMARY, 'metal');
-  railBody.boxBottom(0, -0.11, 1.24, 0.14, 0.04, 0.34, tracerOpt.hex, 'emissive');
-  const railMuzzleZ = addModularMuzzle(railBody, loadout.muzzle, -0.12, 1.5, SECONDARY, DARK_POLY);
-  addModularCharm(railBody, loadout.charm, 0.1, -0.12, 0.4);
-  railRoot.add(railBody.build(materials));
-
-  const railMag = buildModularMagazine(loadout.magazine, -0.37, 0.56, 0.11, materials);
-  railRoot.add(railMag);
-
-  const railBolt = new THREE.Group();
-  const rBoltAsm = new VoxelAssembler();
-  rBoltAsm.boxBottom(-0.1, -0.1, 0.42, 0.1, 0.05, 0.06, 0xcfd6dd, 'metal');
-  rBoltAsm.boxBottom(-0.15, -0.13, 0.42, 0.06, 0.06, 0.06, DARK_POLY);
-  railBolt.add(rBoltAsm.build(materials));
-  railRoot.add(railBolt);
-  railRoot.visible = false;
-
-  const rpgRoot = buildRpgMesh(materials);
-  rpgRoot.visible = false;
-
-  const katanaRoot = buildKatanaMesh(materials);
-  katanaRoot.visible = false;
-
-  return {
-    pulse: {
-      root: pulseRoot,
-      magazine: pulseMag,
-      boltOrPump: pulseBolt,
-      muzzleOffsetZ: pulseMuzzleZ,
-      ejectOffset: new THREE.Vector3(-0.1, -0.06, 0.48),
-    },
-    scatter: {
-      root: scatterRoot,
-      magazine: scatterMag,
-      boltOrPump: scatterPump,
-      muzzleOffsetZ: scatterMuzzleZ,
-      ejectOffset: new THREE.Vector3(-0.1, -0.08, 0.52),
-    },
-    rail: {
-      root: railRoot,
-      magazine: railMag,
-      boltOrPump: railBolt,
-      muzzleOffsetZ: railMuzzleZ,
-      ejectOffset: new THREE.Vector3(-0.12, -0.06, 0.46),
-    },
-    rpg: {
-      root: rpgRoot,
-      magazine: new THREE.Group(),
-      boltOrPump: new THREE.Group(),
-      muzzleOffsetZ: 0.95,
-      ejectOffset: new THREE.Vector3(0, 0, 0),
-    },
-    katana: {
-      root: katanaRoot,
-      magazine: new THREE.Group(),
-      boltOrPump: new THREE.Group(),
-      muzzleOffsetZ: 0.75,
-      ejectOffset: new THREE.Vector3(0, 0, 0),
-    },
-  };
-}
-
-/**
- * Builds the Hero "K-04" Voxel Ranger Bot with all 128 character & firearm customizations.
+ * Builds the player operator: a detailed micro-voxel human (see heroModel.ts) holding every
+ * firearm built from its per-gun build (see gunModels.ts / armory.ts).
  */
 export function buildHeroRig(
   materials: SharedVoxelMaterials,
   loadout: LoadoutConfig = DEFAULT_LOADOUT,
+  builds: GunBuilds = DEFAULT_GUN_BUILDS,
 ): HeroRig {
   const root = new THREE.Group();
   const bodyPivot = new THREE.Group();
   root.add(bodyPivot);
 
   const flashMaterials: THREE.MeshStandardMaterial[] = [];
-  const collectFlash = (g: THREE.Group) => {
+  const collectFlash = (g: THREE.Object3D) => {
     g.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const m = (obj as THREE.Mesh).material;
@@ -485,259 +125,69 @@ export function buildHeroRig(
     });
   };
 
-  const headOpt = getOption('headgear', loadout.headgear);
-  const visorOpt = getOption('visorColor', loadout.visorColor);
-  const jacketOpt = getOption('jacketColor', loadout.jacketColor);
-  const outfitOpt = getOption('outfitStyle', loadout.outfitStyle);
-  const pantsOpt = getOption('pantsStyle', loadout.pantsStyle);
-  const packOpt = getOption('backpack', loadout.backpack);
-  const glowOpt = getOption('accentGlow', loadout.accentGlow);
-  const tracerOpt = getOption('tracerFx', loadout.tracerFx);
+  const parts = buildOperatorParts(materials, loadout);
+  const glow = getOption('accentGlow', loadout.accentGlow).hex;
+  const tracer = getOption('tracerFx', loadout.tracerFx).hex;
 
-  const JACKET = jacketOpt.hex;
-  const JACKET_TRIM = jacketOpt.secondaryHex ?? 0xc25b1d;
-  const OUTFIT_ACCENT = outfitOpt.hex;
-  const PANTS = pantsOpt.hex;
-  const BOOT = pantsOpt.secondaryHex ?? 0x1c222e;
-  const HELMET = headOpt.hex;
-  const HELMET_RIM = 0x4b535c;
-  const VISOR_BG = 0x14202b;
-  const EYE_GLOW = visorOpt.hex;
-  const ACCENT_GLOW = glowOpt.hex;
-  const PACK_COLOR = packOpt.hex;
-
-  // Torso + Outfit Style + Back Gear
   const torsoGroup = new THREE.Group();
   torsoGroup.position.set(0, 0.72, 0);
-  const torsoAsm = new VoxelAssembler();
-  torsoAsm.boxBottom(0, 0, 0, 0.56, 0.52, 0.36, JACKET);
-  torsoAsm.boxBottom(0, 0.0, 0, 0.6, 0.12, 0.4, PANTS);
-  torsoAsm.boxBottom(0, 0.02, 0.21, 0.16, 0.08, 0.04, 0xf2c641, 'metal');
+  torsoGroup.add(parts.torsoMesh);
+  collectFlash(parts.torsoMesh);
 
-  // Outfit Rig Variations (8 distinct styles!)
-  if (loadout.outfitStyle === 'heavy_exo') {
-    torsoAsm.boxBottom(0, 0.08, 0.16, 0.46, 0.36, 0.12, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(-0.34, 0.34, 0, 0.24, 0.24, 0.42, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(0.34, 0.34, 0, 0.24, 0.24, 0.42, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(0, 0.46, 0, 0.68, 0.14, 0.44, JACKET_TRIM, 'metal');
-  } else if (loadout.outfitStyle === 'street_bomber') {
-    torsoAsm.boxBottom(0, 0.1, 0.18, 0.1, 0.38, 0.05, 0xdce4ec, 'metal');
-    torsoAsm.boxBottom(0, 0.48, -0.02, 0.66, 0.16, 0.44, OUTFIT_ACCENT);
-    torsoAsm.boxBottom(0, 0.16, 0.19, 0.58, 0.07, 0.04, ACCENT_GLOW, 'emissive');
-  } else if (loadout.outfitStyle === 'winter_parka') {
-    torsoAsm.boxBottom(0, 0.06, 0.15, 0.44, 0.38, 0.12, OUTFIT_ACCENT);
-    torsoAsm.boxBottom(0, 0.48, 0, 0.7, 0.16, 0.48, 0xf2f6fa);
-    torsoAsm.boxBottom(0, 0.22, 0.22, 0.4, 0.06, 0.04, JACKET_TRIM);
-  } else if (loadout.outfitStyle === 'hazmat_suit') {
-    torsoAsm.boxBottom(0, 0.08, 0.17, 0.42, 0.36, 0.1, OUTFIT_ACCENT);
-    torsoAsm.boxBottom(-0.12, 0.2, 0.23, 0.12, 0.12, 0.06, 0x262b30, 'metal');
-    torsoAsm.boxBottom(0.12, 0.2, 0.23, 0.12, 0.12, 0.06, 0x262b30, 'metal');
-    torsoAsm.boxBottom(0, 0.46, 0, 0.64, 0.12, 0.42, 0x262b30);
-  } else if (loadout.outfitStyle === 'cyber_shinobi') {
-    torsoAsm.boxBottom(0, 0.46, 0.04, 0.66, 0.16, 0.46, 0xb82424);
-    torsoAsm.boxBottom(0, 0.12, 0.19, 0.44, 0.08, 0.05, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(0, 0.28, 0.19, 0.44, 0.08, 0.05, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(0, 0.2, 0.22, 0.16, 0.16, 0.04, ACCENT_GLOW, 'emissive');
-  } else if (loadout.outfitStyle === 'field_medic') {
-    torsoAsm.boxBottom(0, 0.08, 0.16, 0.42, 0.36, 0.1, 0xf2eee6);
-    torsoAsm.boxBottom(0, 0.2, 0.22, 0.2, 0.07, 0.04, 0xe02c2c, 'emissive');
-    torsoAsm.boxBottom(0, 0.14, 0.22, 0.07, 0.2, 0.04, 0xe02c2c, 'emissive');
-    torsoAsm.boxBottom(0, 0.48, 0, 0.62, 0.1, 0.4, JACKET_TRIM);
-  } else if (loadout.outfitStyle === 'neon_runner') {
-    torsoAsm.boxBottom(0, 0.08, 0.16, 0.4, 0.34, 0.09, OUTFIT_ACCENT, 'metal');
-    torsoAsm.boxBottom(-0.18, 0.12, 0.21, 0.06, 0.34, 0.04, ACCENT_GLOW, 'emissive');
-    torsoAsm.boxBottom(0.18, 0.12, 0.21, 0.06, 0.34, 0.04, ACCENT_GLOW, 'emissive');
-    torsoAsm.boxBottom(0, 0.48, 0, 0.64, 0.11, 0.42, ACCENT_GLOW, 'emissive');
-  } else {
-    // classic_ranger
-    torsoAsm.boxBottom(0, 0.08, 0.16, 0.36, 0.32, 0.08, OUTFIT_ACCENT);
-    torsoAsm.boxBottom(0, 0.48, 0, 0.62, 0.1, 0.4, JACKET_TRIM);
-  }
-
-  // Back Gear Variations (8 distinct backpack models!)
-  if (loadout.backpack === 'katana_pack') {
-    torsoAsm.boxBottom(0, 0.16, -0.22, 0.34, 0.3, 0.12, 0x22252b, 'metal');
-    // Twin vertical/diagonal katana scabbards & glowing hilts rising above shoulders
-    torsoAsm.boxBottom(-0.18, 0.02, -0.29, 0.07, 0.96, 0.07, 0x1e2024, 'metal');
-    torsoAsm.boxBottom(0.18, 0.02, -0.29, 0.07, 0.96, 0.07, 0x1e2024, 'metal');
-    torsoAsm.boxBottom(-0.18, 0.92, -0.29, 0.14, 0.05, 0.1, 0xd9a844, 'metal');
-    torsoAsm.boxBottom(0.18, 0.92, -0.29, 0.14, 0.05, 0.1, 0xd9a844, 'metal');
-    torsoAsm.boxBottom(-0.18, 0.97, -0.29, 0.06, 0.24, 0.06, ACCENT_GLOW, 'emissive');
-    torsoAsm.boxBottom(0.18, 0.97, -0.29, 0.06, 0.24, 0.06, ACCENT_GLOW, 'emissive');
-  } else if (loadout.backpack === 'bio_canister') {
-    torsoAsm.boxBottom(0, 0.1, -0.25, 0.46, 0.44, 0.2, 0x353d38, 'metal');
-    torsoAsm.boxBottom(-0.12, 0.16, -0.34, 0.16, 0.36, 0.16, PACK_COLOR, 'emissive');
-    torsoAsm.boxBottom(0.12, 0.16, -0.34, 0.16, 0.36, 0.16, PACK_COLOR, 'emissive');
-  } else if (loadout.backpack === 'radio_dish') {
-    torsoAsm.boxBottom(0, 0.12, -0.25, 0.44, 0.44, 0.2, PACK_COLOR, 'metal');
-    torsoAsm.boxBottom(-0.16, 0.56, -0.28, 0.05, 0.52, 0.05, 0x8e98a4, 'metal');
-    torsoAsm.boxBottom(0.14, 0.5, -0.34, 0.26, 0.26, 0.06, 0xdce4ec, 'metal');
-    torsoAsm.boxBottom(0.14, 0.6, -0.38, 0.08, 0.08, 0.06, ACCENT_GLOW, 'emissive');
-  } else if (loadout.backpack === 'snow_pack') {
-    torsoAsm.boxBottom(0, 0.08, -0.27, 0.48, 0.48, 0.26, PACK_COLOR);
-    torsoAsm.boxBottom(0, 0.56, -0.27, 0.54, 0.16, 0.18, 0xe8eff5); // rolled snow bedroll
-    torsoAsm.boxBottom(0.24, 0.14, -0.36, 0.06, 0.46, 0.06, 0x8d5a34); // ice axe handle
-    torsoAsm.boxBottom(0.24, 0.58, -0.36, 0.18, 0.06, 0.06, 0xcfd6dd, 'metal');
-  } else if (loadout.backpack === 'ammo_drum') {
-    torsoAsm.boxBottom(0, 0.1, -0.28, 0.52, 0.46, 0.26, PACK_COLOR, 'metal');
-    torsoAsm.boxBottom(0, 0.24, -0.42, 0.42, 0.14, 0.06, 0xd9a844, 'metal');
-    torsoAsm.boxBottom(0, 0.42, -0.28, 0.36, 0.12, 0.18, 0x2b3036, 'metal');
-  } else if (loadout.backpack === 'neon_wings') {
-    torsoAsm.boxBottom(0, 0.16, -0.24, 0.34, 0.36, 0.14, 0x242a34, 'metal');
-    torsoAsm.boxBottom(-0.46, 0.28, -0.32, 0.62, 0.14, 0.08, ACCENT_GLOW, 'emissive');
-    torsoAsm.boxBottom(0.46, 0.28, -0.32, 0.62, 0.14, 0.08, ACCENT_GLOW, 'emissive');
-    torsoAsm.boxBottom(-0.56, 0.48, -0.34, 0.52, 0.12, 0.08, PACK_COLOR, 'emissive');
-    torsoAsm.boxBottom(0.56, 0.48, -0.34, 0.52, 0.12, 0.08, PACK_COLOR, 'emissive');
-  } else if (loadout.backpack === 'med_frame') {
-    torsoAsm.boxBottom(0, 0.12, -0.26, 0.46, 0.44, 0.2, 0xf2eee6);
-    torsoAsm.boxBottom(0, 0.28, -0.37, 0.22, 0.08, 0.04, PACK_COLOR, 'emissive');
-    torsoAsm.boxBottom(0, 0.21, -0.37, 0.08, 0.22, 0.04, PACK_COLOR, 'emissive');
-  } else {
-    // dual_thruster
-    torsoAsm.boxBottom(0, 0.12, -0.25, 0.44, 0.42, 0.18, PACK_COLOR, 'metal');
-    torsoAsm.boxBottom(-0.13, 0.06, -0.32, 0.14, 0.28, 0.12, 0x2c323a, 'metal');
-    torsoAsm.boxBottom(0.13, 0.06, -0.32, 0.14, 0.28, 0.12, 0x2c323a, 'metal');
-    torsoAsm.boxBottom(0, 0.32, -0.35, 0.24, 0.1, 0.06, ACCENT_GLOW, 'emissive');
-  }
-
-  const torsoMesh = torsoAsm.build(materials, { cloneMaterials: true });
-  collectFlash(torsoMesh);
-  torsoGroup.add(torsoMesh);
-
-  const flameGeo = new THREE.BoxGeometry(0.32, 0.38, 0.18);
-  const flameMat = new THREE.MeshBasicMaterial({
-    color: ACCENT_GLOW,
-    transparent: true,
-    opacity: 0,
-  });
-  const thrusterFlame = new THREE.Mesh(flameGeo, flameMat);
-  thrusterFlame.position.set(0, -0.08, -0.34);
+  const thrusterFlame = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.38, 0.18),
+    new THREE.MeshBasicMaterial({ color: glow, transparent: true, opacity: 0 }),
+  );
+  thrusterFlame.position.set(0, 0.0, parts.thrusterZ);
   torsoGroup.add(thrusterFlame);
   bodyPivot.add(torsoGroup);
 
-  // Customized Headgear (8 distinct voxel helmet/hat/mask silhouettes!)
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, 0.56, 0);
-  const headAsm = new VoxelAssembler();
-  // Core head & glowing visor eyes
-  headAsm.boxBottom(0, 0, 0, 0.62, 0.5, 0.56, HELMET);
-  headAsm.boxBottom(-0.32, 0.14, 0, 0.08, 0.22, 0.22, HELMET_RIM, 'metal');
-  headAsm.boxBottom(0.32, 0.14, 0, 0.08, 0.22, 0.22, HELMET_RIM, 'metal');
-  headAsm.boxBottom(0, 0.1, 0.26, 0.48, 0.3, 0.08, VISOR_BG, 'metal');
-  headAsm.boxBottom(-0.12, 0.2, 0.3, 0.11, 0.12, 0.04, EYE_GLOW, 'emissive');
-  headAsm.boxBottom(0.12, 0.2, 0.3, 0.11, 0.12, 0.04, EYE_GLOW, 'emissive');
-
-  if (loadout.headgear === 'ronin_kasa') {
-    headAsm.boxBottom(0, 0.46, 0, 1.18, 0.12, 1.18, 0xc99b4f);
-    headAsm.boxBottom(0, 0.58, 0, 0.82, 0.12, 0.82, 0xb0823c);
-    headAsm.boxBottom(0, 0.7, 0, 0.44, 0.12, 0.44, 0x8f662b);
-  } else if (loadout.headgear === 'cyber_kabuto') {
-    headAsm.boxBottom(0, 0.46, -0.04, 0.72, 0.14, 0.66, 0x22262e, 'metal');
-    headAsm.boxBottom(0, 0.54, 0.26, 0.76, 0.12, 0.08, 0xf2c641, 'metal');
-    headAsm.boxBottom(-0.34, 0.62, 0.26, 0.12, 0.24, 0.08, 0xf2c641, 'metal');
-    headAsm.boxBottom(0.34, 0.62, 0.26, 0.12, 0.24, 0.08, 0xf2c641, 'metal');
-    headAsm.boxBottom(0, 0.04, -0.32, 0.76, 0.36, 0.12, 0x9c2222);
-  } else if (loadout.headgear === 'nvg_ops') {
-    headAsm.boxBottom(0, 0.46, 0, 0.66, 0.12, 0.62, 0x2c362e);
-    headAsm.boxBottom(0, 0.46, 0.32, 0.46, 0.12, 0.16, 0x1e2226, 'metal');
-    headAsm.boxBottom(-0.16, 0.48, 0.41, 0.09, 0.09, 0.08, 0x4ef2a1, 'emissive');
-    headAsm.boxBottom(-0.05, 0.48, 0.41, 0.09, 0.09, 0.08, 0x4ef2a1, 'emissive');
-    headAsm.boxBottom(0.05, 0.48, 0.41, 0.09, 0.09, 0.08, 0x4ef2a1, 'emissive');
-    headAsm.boxBottom(0.16, 0.48, 0.41, 0.09, 0.09, 0.08, 0x4ef2a1, 'emissive');
-  } else if (loadout.headgear === 'kitsune_mask') {
-    headAsm.boxBottom(-0.22, 0.5, 0.04, 0.16, 0.3, 0.16, 0xf5efe6);
-    headAsm.boxBottom(0.22, 0.5, 0.04, 0.16, 0.3, 0.16, 0xf5efe6);
-    headAsm.boxBottom(-0.22, 0.56, 0.13, 0.08, 0.18, 0.04, 0xd43838);
-    headAsm.boxBottom(0.22, 0.56, 0.13, 0.08, 0.18, 0.04, 0xd43838);
-    headAsm.boxBottom(0, 0.38, 0.3, 0.26, 0.06, 0.04, 0xd43838);
-  } else if (loadout.headgear === 'snow_ushanka') {
-    headAsm.boxBottom(0, 0.44, 0, 0.72, 0.24, 0.68, 0x7c553b);
-    headAsm.boxBottom(0, 0.44, 0.32, 0.68, 0.2, 0.12, 0xe4e8ee);
-    headAsm.boxBottom(-0.37, 0.08, 0.02, 0.12, 0.42, 0.28, 0xe4e8ee);
-    headAsm.boxBottom(0.37, 0.08, 0.02, 0.12, 0.42, 0.28, 0xe4e8ee);
-  } else if (loadout.headgear === 'hazmat_mask') {
-    headAsm.boxBottom(0, 0.48, 0, 0.64, 0.1, 0.6, 0x3b4239);
-    headAsm.boxBottom(-0.2, 0.04, 0.34, 0.16, 0.16, 0.16, 0x262b26, 'metal');
-    headAsm.boxBottom(0.2, 0.04, 0.34, 0.16, 0.16, 0.16, 0x262b26, 'metal');
-    headAsm.boxBottom(0, 0.06, 0.32, 0.22, 0.14, 0.12, 0x4c544b, 'metal');
-  } else if (loadout.headgear === 'crowned_visor') {
-    headAsm.boxBottom(0, 0.48, 0, 0.66, 0.08, 0.62, 0x202836, 'metal');
-    headAsm.boxBottom(0, 0.62, 0, 0.74, 0.07, 0.7, ACCENT_GLOW, 'emissive');
-    headAsm.boxBottom(0, 0.7, 0.32, 0.12, 0.16, 0.08, ACCENT_GLOW, 'emissive');
-    headAsm.boxBottom(-0.24, 0.7, 0.28, 0.1, 0.12, 0.08, ACCENT_GLOW, 'emissive');
-    headAsm.boxBottom(0.24, 0.7, 0.28, 0.1, 0.12, 0.08, ACCENT_GLOW, 'emissive');
-  } else {
-    // ranger_helm
-    headAsm.boxBottom(0, 0.48, 0, 0.52, 0.08, 0.48, 0xf6f2e8);
-    headAsm.boxBottom(0.24, 0.5, -0.06, 0.06, 0.22, 0.06, HELMET_RIM, 'metal');
-    headAsm.boxBottom(0.24, 0.72, -0.06, 0.1, 0.1, 0.1, ACCENT_GLOW, 'emissive');
-  }
-
-  const headMesh = headAsm.build(materials, { cloneMaterials: true });
-  collectFlash(headMesh);
-  headGroup.add(headMesh);
+  headGroup.position.set(0, parts.headY, 0);
+  headGroup.add(parts.headGroupContent);
+  collectFlash(parts.headGroupContent);
   torsoGroup.add(headGroup);
 
-  // Articulated Legs
-  const buildLeg = (side: -1 | 1) => {
-    const g = new THREE.Group();
-    g.position.set(side * 0.16, 0.72, 0);
-    const asm = new VoxelAssembler();
-    asm.boxBottom(0, -0.46, 0, 0.22, 0.46, 0.24, PANTS);
-    asm.boxBottom(0, -0.72, 0.04, 0.24, 0.26, 0.32, BOOT);
-    const m = asm.build(materials, { cloneMaterials: true });
-    collectFlash(m);
-    g.add(m);
-    return g;
-  };
-  const leftLeg = buildLeg(-1);
-  const rightLeg = buildLeg(1);
+  const leftLeg = parts.buildLeg(-1);
+  const rightLeg = parts.buildLeg(1);
+  collectFlash(leftLeg);
+  collectFlash(rightLeg);
   bodyPivot.add(leftLeg, rightLeg);
 
-  // Left Support Arm
   const leftArm = new THREE.Group();
-  leftArm.position.set(0.38, 0.46, 0);
-  const laAsm = new VoxelAssembler();
-  laAsm.boxBottom(0, -0.34, 0, 0.18, 0.38, 0.2, JACKET);
-  laAsm.boxBottom(0, -0.46, 0, 0.16, 0.14, 0.18, HELMET_RIM, 'metal');
-  const laMesh = laAsm.build(materials, { cloneMaterials: true });
-  collectFlash(laMesh);
-  leftArm.add(laMesh);
+  leftArm.position.copy(parts.leftShoulder);
+  leftArm.add(parts.leftArmMesh);
+  collectFlash(parts.leftArmMesh);
   torsoGroup.add(leftArm);
 
-  // Right Weapon Arm
   const rightArm = new THREE.Group();
-  rightArm.position.set(-0.46, 0.44, 0.08);
-  const raAsm = new VoxelAssembler();
-  raAsm.boxBottom(0, -0.14, 0.12, 0.19, 0.21, 0.36, JACKET);
-  raAsm.boxBottom(0, -0.14, 0.32, 0.17, 0.17, 0.14, HELMET_RIM, 'metal');
-  const raMesh = raAsm.build(materials, { cloneMaterials: true });
-  collectFlash(raMesh);
-  rightArm.add(raMesh);
+  rightArm.position.copy(parts.rightShoulder);
+  rightArm.add(parts.rightArmMesh);
+  collectFlash(parts.rightArmMesh);
 
-  const weaponRigs = buildDetailedWeapons(materials, loadout);
-  weaponRigs.pulse.root.scale.setScalar(1.12);
-  weaponRigs.scatter.root.scale.setScalar(1.12);
-  weaponRigs.rail.root.scale.setScalar(1.12);
-  weaponRigs.rpg.root.scale.setScalar(1.12);
-  weaponRigs.katana.root.scale.setScalar(1.12);
-  rightArm.add(
-    weaponRigs.pulse.root,
-    weaponRigs.scatter.root,
-    weaponRigs.rail.root,
-    weaponRigs.rpg.root,
-    weaponRigs.katana.root,
-  );
+  const weaponRigs: Record<WeaponId, WeaponRig> = {
+    pulse: buildFirearm('pulse', builds.pulse, loadout, materials),
+    scatter: buildFirearm('scatter', builds.scatter, loadout, materials),
+    rail: buildFirearm('rail', builds.rail, loadout, materials),
+    rpg: buildFirearm('rpg', builds.rpg, loadout, materials),
+    katana: buildKatanaRig(materials),
+  };
+  for (const id of Object.keys(weaponRigs) as WeaponId[]) {
+    const w = weaponRigs[id];
+    w.root.scale.setScalar(1.12);
+    w.root.visible = id === 'pulse';
+    rightArm.add(w.root);
+  }
 
   const muzzlePoint = new THREE.Object3D();
-  muzzlePoint.position.set(0, -0.09, weaponRigs.pulse.muzzleOffsetZ * 1.12);
+  muzzlePoint.position.set(0, weaponRigs.pulse.muzzleY * 1.12, weaponRigs.pulse.muzzleOffsetZ * 1.12);
   rightArm.add(muzzlePoint);
 
   const ejectPoint = new THREE.Object3D();
   ejectPoint.position.copy(weaponRigs.pulse.ejectOffset);
   rightArm.add(ejectPoint);
 
-  const muzzleFlash = buildMuzzleFlashMesh(tracerOpt.hex);
+  const muzzleFlash = buildMuzzleFlashMesh(tracer);
   muzzlePoint.add(muzzleFlash);
 
   torsoGroup.add(rightArm);
@@ -761,6 +211,8 @@ export function buildHeroRig(
     thrusterFlame,
     contactShadow,
     flashMaterials,
+    eyelids: parts.eyelids,
+    eyeY: parts.eyeY,
   };
 }
 

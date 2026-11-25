@@ -1,6 +1,35 @@
 import React from 'react';
+import {
+  AURORA_BORDER_X,
+  AURORA_COAST_X,
+  AURORA_MINIMAP_ROADS,
+  AURORA_NORTH_Z,
+} from '../game/aurora/auroraLayout';
 import { ARENA_HALF_EXTENT, WEAPON_ORDER, WEAPONS, WORLD_ZONE_INFO } from '../game/rules';
 import type { HudSnapshot, WeaponId } from '../game/types';
+import { AdsReticle, ScopeOverlay } from './ScopeOverlay';
+
+/** Highways & avenues as world-space segments [x1, z1, x2, z2] (mirrors worldBuilder's road network). */
+const MINIMAP_ROADS: Array<[number, number, number, number]> = [
+  // East-West
+  [AURORA_BORDER_X, 13.8, 138, 13.8],
+  [AURORA_BORDER_X, 96, 130, 96],
+  [26, 56, 128, 56],
+  [26, -24, 128, -24],
+  [-126, -66, 126, -66],
+  [-126, -104, 126, -104],
+  [-126, -134, 126, -134],
+  // North-South
+  [-26, -136, -26, 100],
+  [28, -136, 28, 100],
+  [-68, -136, -68, AURORA_NORTH_Z],
+  [-102, -136, -102, AURORA_NORTH_Z],
+  [-132, -136, -132, AURORA_NORTH_Z],
+  [76, -136, 76, 100],
+  [122, -136, 122, 100],
+  // Aurora City streets
+  ...AURORA_MINIMAP_ROADS,
+];
 
 interface GameHudProps {
   hud: HudSnapshot;
@@ -163,6 +192,8 @@ export const GameHud: React.FC<GameHudProps> = ({
   const ghostPct = Math.max(hpPct, Math.min(100, (hud.ghostHp / hud.maxHp) * 100));
   const lowHp = hud.hp <= 30;
   const spreadPx = (hud.aiming ? 5 : 10) + hud.crosshairSpread * 16;
+  const scopeFull = hud.scope.fullscreen && !hud.inVehicle;
+  const opticReticle = hud.aiming && !hud.inVehicle && !scopeFull && hud.scope.blend > 0.35 && hud.weapon !== 'katana';
 
   // Open-world Minimap coordinate converter (-148..148 -> 0..136)
   const mapSize = 136;
@@ -193,8 +224,36 @@ export const GameHud: React.FC<GameHudProps> = ({
         />
       )}
 
-      {/* Exact Center Dynamic Crosshair + Hitmarker + Reload Arc (hidden while driving) */}
-      {!hud.inVehicle && (
+      {scopeFull && <ScopeOverlay scope={hud.scope} hitmarker={hud.hitmarkerTimer > 0} hitmarkerCrit={hud.hitmarkerCrit} />}
+
+      {/* Optic reticle while aiming with 1x-1.6x sights */}
+      {opticReticle && (
+        <div className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none" aria-hidden="true">
+          <AdsReticle scope={hud.scope} spreadPx={spreadPx} />
+        </div>
+      )}
+
+      {/* Unlock toasts (new attachments, gun models, level ups) */}
+      {hud.unlockToasts.length > 0 && (
+        <div className="fixed top-24 right-4 flex flex-col gap-2 w-[280px] pointer-events-none z-30">
+          {hud.unlockToasts.map((t) => (
+            <div
+              key={t.id}
+              className="px-3 py-2 rounded-sm bg-[#120f0c]/92 border-l-4 border-[#fbbf24] shadow-[0_6px_20px_rgba(0,0,0,0.5)]"
+              style={{ opacity: Math.min(1, t.timer / 0.6), transform: `translateX(${Math.max(0, (t.timer - 5.2) * 120)}px)` }}
+            >
+              <div className="text-[10px] font-display font-bold uppercase tracking-[0.2em] text-[#fbbf24]">
+                {t.title.includes('Level') ? 'Level Up' : 'Unlocked'}
+              </div>
+              <div className="text-sm font-display font-bold text-white leading-tight">{t.title}</div>
+              <div className="text-[11px] text-[#cbb699]">{t.detail}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Exact Center Dynamic Crosshair + Hitmarker + Reload Arc (hidden while driving / scoped) */}
+      {!hud.inVehicle && !scopeFull && (
         <div
           className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
           aria-hidden="true"
@@ -214,7 +273,9 @@ export const GameHud: React.FC<GameHudProps> = ({
             />
           )}
 
-          {/* Crisp 4-tick reticle with dark outline */}
+          {/* Crisp 4-tick reticle with dark outline (replaced by the optic's reticle while aiming) */}
+          {!opticReticle && (
+          <>
           <g stroke="#140e0a" strokeWidth="4" strokeLinecap="square">
             <line x1="0" y1={-spreadPx - 7} x2="0" y2={-spreadPx} />
             <line x1="0" y1={spreadPx} x2="0" y2={spreadPx + 7} />
@@ -228,6 +289,8 @@ export const GameHud: React.FC<GameHudProps> = ({
             <line x1={spreadPx} y1="0" x2={spreadPx + 7} y2="0" />
           </g>
           <circle cx="0" cy="0" r="2.2" fill={activeSpec.accentHex} stroke="#140e0a" strokeWidth="1.2" />
+          </>
+          )}
 
           {/* Hitmarker ticks */}
           {hud.hitmarkerTimer > 0 && (
@@ -693,8 +756,21 @@ export const GameHud: React.FC<GameHudProps> = ({
             {/* Biome Quadrants */}
             {/* North: Kopenhime Snowpeak (z < -44) */}
             <rect x="0" y="0" width={mapSize} height={toMapY(-44)} fill="#6a8599" />
-            {/* West: Aurora City (x < -44) */}
-            <rect x="0" y={toMapY(-44)} width={toMapX(-44)} height={mapSize - toMapY(-44)} fill="#223047" />
+            {/* West: Aurora City (island + outskirts) with the western sea beyond the quay */}
+            <rect
+              x="0"
+              y={toMapY(AURORA_NORTH_Z)}
+              width={toMapX(AURORA_BORDER_X)}
+              height={mapSize - toMapY(AURORA_NORTH_Z)}
+              fill="#2c5a3a"
+            />
+            <rect
+              x="0"
+              y={toMapY(AURORA_NORTH_Z)}
+              width={toMapX(AURORA_COAST_X)}
+              height={mapSize - toMapY(AURORA_NORTH_Z)}
+              fill="#2a7f9c"
+            />
             {/* East: Fungi Forest (x > 44) */}
             <rect
               x={toMapX(44)}
@@ -706,14 +782,21 @@ export const GameHud: React.FC<GameHudProps> = ({
 
             {/* Connected Multi-Highway Road Grid */}
             <g fill="#42474f">
-              {/* E-W Highways */}
-              {[13.8, 56, 96, -24, -66, -104, -134].map((rz) => (
-                <rect key={`hz-${rz}`} x="2" y={toMapY(rz) - 1.5} width={mapSize - 4} height="3" />
-              ))}
-              {/* N-S Expressways & Avenues */}
-              {[-132, -102, -68, -26, 28, 76, 122].map((rx) => (
-                <rect key={`vx-${rx}`} x={toMapX(rx) - 1.5} y="2" width="3" height={mapSize - 4} />
-              ))}
+              {MINIMAP_ROADS.map(([x1, z1, x2, z2], idx) => {
+                const left = toMapX(Math.max(-ARENA_HALF_EXTENT, Math.min(x1, x2)));
+                const right = toMapX(Math.min(ARENA_HALF_EXTENT, Math.max(x1, x2)));
+                const top = toMapY(Math.max(-ARENA_HALF_EXTENT, Math.min(z1, z2)));
+                const bottom = toMapY(Math.min(ARENA_HALF_EXTENT, Math.max(z1, z2)));
+                return (
+                  <rect
+                    key={`road-${idx}`}
+                    x={left - 1.5}
+                    y={top - 1.5}
+                    width={right - left + 3}
+                    height={bottom - top + 3}
+                  />
+                );
+              })}
             </g>
 
             {/* Kuroba Station Landmark */}
@@ -1026,6 +1109,13 @@ export const GameHud: React.FC<GameHudProps> = ({
                 </div>
                 <div className="text-[11px] text-[#cbb699]">
                   {activeSpec.role} · <span className="text-[#f2c46d]">[R] Reload</span>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[9px] font-display font-bold text-[#fbbf24]">WPN LV {hud.weaponLevel}</span>
+                  <div className="w-16 h-1 rounded-full bg-white/15 overflow-hidden">
+                    <div className="h-full bg-[#fbbf24]" style={{ width: `${Math.round(hud.weaponLevelProgress * 100)}%` }} />
+                  </div>
+                  <span className="text-[9px] font-display font-bold text-[#7dd3fc]">OP LV {hud.playerLevel}</span>
                 </div>
               </div>
 

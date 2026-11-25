@@ -320,42 +320,8 @@ function createMicroVoxelBumpTexture(maxAnisotropy: number): THREE.CanvasTexture
 }
 
 /**
- * Lush sunlit meadow voxel grass tile matching the golden-green dappled reference turf.
- */
-export function createMeadowGroundTexture(maxAnisotropy: number): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d')!;
-
-  const palette = ['#4c7a36', '#58893c', '#639441', '#447031', '#6fa148', '#527f38'];
-  const cell = 8;
-  for (let y = 0; y < 256; y += cell) {
-    for (let x = 0; x < 256; x += cell) {
-      const h = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453);
-      const idx = Math.floor((h - Math.floor(h)) * palette.length);
-      ctx.fillStyle = palette[idx];
-      ctx.fillRect(x, y, cell, cell);
-      // Warm golden sunlight speckle
-      if ((x + y * 3) % 32 === 0) {
-        ctx.fillStyle = 'rgba(182, 214, 102, 0.28)';
-        ctx.fillRect(x + 2, y + 2, 4, 4);
-      }
-    }
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(28, 28);
-  tex.magFilter = THREE.NearestFilter;
-  tex.anisotropy = maxAnisotropy;
-  return tex;
-}
-
-/**
- * Crisp Japanese asphalt road texture with warm golden dashed centerline.
+ * Aurora City style asphalt: flat slate-navy surface, faint grain, pale shoulders and a bright
+ * yellow dashed centerline (matches the micro-voxel roads of the Aurora City diorama).
  */
 export function createAsphaltRoadTexture(maxAnisotropy: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -363,25 +329,25 @@ export function createAsphaltRoadTexture(maxAnisotropy: number): THREE.CanvasTex
   canvas.height = 128;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = '#2c2f33';
+  ctx.fillStyle = '#262b36';
   ctx.fillRect(0, 0, 256, 128);
 
-  // Subtle pixel grain
+  // Very faint pixel grain
   for (let y = 0; y < 128; y += 4) {
     for (let x = 0; x < 256; x += 4) {
-      const v = 40 + ((x * 7 + y * 13) % 12);
-      ctx.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
+      const v = (x * 7 + y * 13) % 6;
+      ctx.fillStyle = `rgb(${36 + v},${41 + v},${52 + v})`;
       ctx.fillRect(x, y, 4, 4);
     }
   }
 
-  // Subtle white edge shoulder lines
-  ctx.fillStyle = '#cfd4d8';
-  ctx.fillRect(0, 8, 256, 4);
-  ctx.fillRect(0, 116, 256, 4);
+  // Pale shoulder lines
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillRect(0, 8, 256, 3);
+  ctx.fillRect(0, 117, 256, 3);
 
-  // Warm yellow-orange dashed center line (matches reference)
-  ctx.fillStyle = '#e8a838';
+  // Bright yellow dashed centerline
+  ctx.fillStyle = '#facc15';
   for (let x = 16; x < 256; x += 64) {
     ctx.fillRect(x, 60, 34, 8);
   }

@@ -13,22 +13,74 @@ export type VehicleKind = 'kei_truck' | 'olive_jeep' | 'aurora_coupe' | 'fungi_b
 export type WildlifeKind = 'pigeon' | 'crow' | 'cat' | 'fox';
 
 export interface LoadoutConfig {
-  // Character (7 categories, 68 options)
-  headgear: string;
+  // Operator body & face (character generator)
+  bodyType: string;
+  skinTone: string;
+  faceShape: string;
+  eyeStyle: string;
+  /** Iris colour (kept under its legacy key; also tints visor/NVG glow). */
   visorColor: string;
+  browStyle: string;
+  noseStyle: string;
+  mouthStyle: string;
+  hairStyle: string;
+  hairColor: string;
+  facialHair: string;
+  faceDetail: string;
+  // Outfit & gear
+  headgear: string;
   jacketColor: string;
   outfitStyle: string;
   pantsStyle: string;
   backpack: string;
   accentGlow: string;
-  // Gun Armory (7 categories, 60 options)
+  // Weapon cosmetics (shared by every gun)
   gunSkin: string;
+  tracerFx: string;
+  charm: string;
+}
+
+/** Firearms that take attachments (the katana has none). */
+export type FirearmId = 'pulse' | 'scatter' | 'rail' | 'rpg';
+
+export type AttachmentSlot = 'optic' | 'muzzle' | 'underbarrel' | 'magazine' | 'stock' | 'laser';
+
+/** Per-gun build: which model ("variant") is equipped in the slot and its attachments. */
+export interface GunBuild {
+  variant: string;
   optic: string;
   muzzle: string;
   underbarrel: string;
   magazine: string;
-  tracerFx: string;
-  charm: string;
+  stock: string;
+  laser: string;
+}
+
+export type GunBuilds = Record<FirearmId, GunBuild>;
+
+/** How an optic is presented when aiming. */
+export type ReticleKind = 'iron' | 'dot' | 'holo' | 'chevron' | 'mildot' | 'thermal' | 'smart' | 'pgo';
+
+export interface ScopeHudState {
+  /** 0..1 blend while raising / lowering the scope. */
+  blend: number;
+  /** True when a magnified optic is up: full-screen lens view. */
+  fullscreen: boolean;
+  reticle: ReticleKind;
+  zoom: number;
+  reticleColor: string;
+  opticName: string;
+  /** Distance to whatever the reticle is on, in metres (null when nothing in range). */
+  rangeM: number | null;
+  variableZoom: boolean;
+}
+
+export interface UnlockToast {
+  id: number;
+  title: string;
+  detail: string;
+  /** Seconds left on screen. */
+  timer: number;
 }
 
 export interface WeaponSpec {
@@ -250,6 +302,15 @@ export interface HudSnapshot {
   reloading: boolean;
   reloadProgress: number; // 0..1
   aiming: boolean;
+  /** Optic / scope presentation while aiming down sights. */
+  scope: ScopeHudState;
+  /** "New attachment unlocked" style notifications earned this run. */
+  unlockToasts: UnlockToast[];
+  /** Operator progression (persistent). */
+  playerLevel: number;
+  playerLevelProgress: number; // 0..1 to next level
+  weaponLevel: number; // level of the active firearm
+  weaponLevelProgress: number; // 0..1
   pointerLocked: boolean;
   hitmarkerTimer: number;
   hitmarkerCrit: boolean;

@@ -33,15 +33,15 @@ export const WORLD_ZONE_INFO: Record<WorldZoneId, WorldZoneInfo> = {
     name: 'KUROBA CROSSING',
     subtitle: 'Central Railway Heartland',
     accentHex: '#f2c46d',
-    dayFogHex: 0xc8ddd0,
+    dayFogHex: 0xa9d0f5,
     nightFogHex: 0x080e1a,
   },
   aurora: {
     id: 'aurora',
     name: 'AURORA CITY',
-    subtitle: 'West Neon Metropolis',
+    subtitle: 'Western Harbor City',
     accentHex: '#45f2ff',
-    dayFogHex: 0xbcd4e6,
+    dayFogHex: 0x9fcbf3,
     nightFogHex: 0x081326,
   },
   fungi: {
@@ -169,6 +169,21 @@ export const WEAPONS: Record<WeaponId, WeaponSpec> = {
     accentColor: 0xec4899,
   },
 };
+
+/**
+ * The original slot specs. Gun models and attachments (armory.ts) are resolved on top of these
+ * and written into WEAPONS with applyWeaponOverrides, so combat code keeps reading WEAPONS[id].
+ */
+export const BASE_WEAPONS: Readonly<Record<WeaponId, Readonly<WeaponSpec>>> = Object.fromEntries(
+  Object.entries(WEAPONS).map(([id, spec]) => [id, Object.freeze({ ...spec })]),
+) as Record<WeaponId, WeaponSpec>;
+
+/** Resets every weapon to its base spec, then applies the given per-weapon overrides. */
+export function applyWeaponOverrides(overrides: Partial<Record<WeaponId, Partial<WeaponSpec>>>): void {
+  for (const id of Object.keys(BASE_WEAPONS) as WeaponId[]) {
+    Object.assign(WEAPONS[id], BASE_WEAPONS[id], overrides[id] ?? {});
+  }
+}
 
 export const ZOMBIE_LABELS: Record<EnemyArchetype, string> = {
   rusher: 'Infected Sprinter',
@@ -542,10 +557,13 @@ export function resolveCylinderWorldCollision(
   let groundY = 0;
   let hitWall = outX !== x || outZ !== z;
 
+  // Broadphase: only boxes near the query point (push-outs move at most ~radius per pass)
+  const candidates = queryNearbyColliders(colliders, outX, outZ, radius * 4 + 1.0);
+
   // Four passes guarantee zero corner/wall clipping for both characters and cars
   for (let pass = 0; pass < 4; pass++) {
-    for (let i = 0; i < colliders.length; i++) {
-      const box = colliders[i];
+    for (let i = 0; i < candidates.length; i++) {
+      const box = candidates[i];
       const closestX = clamp(outX, box.minX, box.maxX);
       const closestZ = clamp(outZ, box.minZ, box.maxZ);
       const dx = outX - closestX;
@@ -597,6 +615,93 @@ export function resolveCylinderWorldCollision(
   }
 
   return { x: outX, y, z: outZ, groundY, hitWall };
+}
+
+// ---------------------------------------------------------------------------
+// Collider broadphase: a uniform grid over the static collider list, cached per array.
+// The grid is rebuilt whenever the array's length changes (colliders are only ever added
+// with push() or removed with splice(), e.g. destructible props), so callers need no changes.
+// ---------------------------------------------------------------------------
+const GRID_CELL = 8;
+const GRID_MIN_COLLIDERS = 64;
+
+interface ColliderGrid {
+  len: number;
+  minX: number;
+  minZ: number;
+  nx: number;
+  nz: number;
+  cells: Array<number[] | undefined>;
+  stamps: Uint32Array;
+  stamp: number;
+}
+
+const colliderGrids = new WeakMap<ColliderBox[], ColliderGrid>();
+const _nearby: ColliderBox[] = [];
+
+function buildColliderGrid(colliders: ColliderBox[]): ColliderGrid {
+  let minX = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxZ = -Infinity;
+  for (const b of colliders) {
+    if (b.minX < minX) minX = b.minX;
+    if (b.minZ < minZ) minZ = b.minZ;
+    if (b.maxX > maxX) maxX = b.maxX;
+    if (b.maxZ > maxZ) maxZ = b.maxZ;
+  }
+  const nx = Math.max(1, Math.ceil((maxX - minX) / GRID_CELL) + 1);
+  const nz = Math.max(1, Math.ceil((maxZ - minZ) / GRID_CELL) + 1);
+  const cells: Array<number[] | undefined> = new Array(nx * nz);
+  colliders.forEach((b, idx) => {
+    const ix0 = Math.floor((b.minX - minX) / GRID_CELL);
+    const ix1 = Math.floor((b.maxX - minX) / GRID_CELL);
+    const iz0 = Math.floor((b.minZ - minZ) / GRID_CELL);
+    const iz1 = Math.floor((b.maxZ - minZ) / GRID_CELL);
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const k = iz * nx + ix;
+        (cells[k] ??= []).push(idx);
+      }
+    }
+  });
+  return { len: colliders.length, minX, minZ, nx, nz, cells, stamps: new Uint32Array(colliders.length), stamp: 0 };
+}
+
+/**
+ * Returns the colliders whose footprint may lie within `reach` of (x, z). The returned array is
+ * reused between calls: consume it before calling again.
+ */
+export function queryNearbyColliders(colliders: ColliderBox[], x: number, z: number, reach: number): ColliderBox[] {
+  if (colliders.length < GRID_MIN_COLLIDERS) return colliders;
+  let grid = colliderGrids.get(colliders);
+  if (!grid || grid.len !== colliders.length) {
+    grid = buildColliderGrid(colliders);
+    colliderGrids.set(colliders, grid);
+  }
+  _nearby.length = 0;
+  grid.stamp = (grid.stamp + 1) >>> 0;
+  if (grid.stamp === 0) {
+    grid.stamps.fill(0);
+    grid.stamp = 1;
+  }
+  const ix0 = Math.max(0, Math.floor((x - reach - grid.minX) / GRID_CELL));
+  const ix1 = Math.min(grid.nx - 1, Math.floor((x + reach - grid.minX) / GRID_CELL));
+  const iz0 = Math.max(0, Math.floor((z - reach - grid.minZ) / GRID_CELL));
+  const iz1 = Math.min(grid.nz - 1, Math.floor((z + reach - grid.minZ) / GRID_CELL));
+  for (let iz = iz0; iz <= iz1; iz++) {
+    for (let ix = ix0; ix <= ix1; ix++) {
+      const cell: number[] | undefined = grid.cells[iz * grid.nx + ix];
+      if (!cell) continue;
+      for (let j = 0; j < cell.length; j++) {
+        const idx = cell[j];
+        if (grid.stamps[idx] === grid.stamp) continue;
+        grid.stamps[idx] = grid.stamp;
+        _nearby.push(colliders[idx]);
+      }
+    }
+  }
+  return _nearby;
 }
 
 /**
